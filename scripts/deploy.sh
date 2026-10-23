@@ -21,6 +21,20 @@ export INFERENCE_HOST=${INFERENCE_HOST:-api.openai.com}
 export INFERENCE_PORT=${INFERENCE_PORT:-443}
 export MCP_SERVER_URL=${MCP_SERVER_URL:-http://mcp-test:3001/mcp}
 
+# Optional image override (envs append Helm --set-string; unset = common-values.yaml pin).
+# A tag alone must also clear the pinned digest, otherwise the digest (which takes
+# precedence in the chart) would silently keep the default image.
+IMAGE_ARGS=()
+if [[ -n "${PRAXIS_IMAGE_REPO:-}" ]]; then
+  IMAGE_ARGS+=(--set-string "image.repository=$PRAXIS_IMAGE_REPO")
+fi
+if [[ -n "${PRAXIS_IMAGE_DIGEST:-}" ]]; then
+  IMAGE_ARGS+=(--set-string "image.digest=$PRAXIS_IMAGE_DIGEST")
+elif [[ -n "${PRAXIS_IMAGE_TAG:-}" ]]; then
+  IMAGE_ARGS+=(--set-string "image.tag=$PRAXIS_IMAGE_TAG")
+  IMAGE_ARGS+=(--set image.digest=null)
+fi
+
 for tool in oc helm python3 envsubst; do
   command -v "$tool" >/dev/null
 done
@@ -120,6 +134,6 @@ helm upgrade --install "$RELEASE" \
   --set-string "fullnameOverride=$RELEASE" \
   --set-string "env[0].valueFrom.secretKeyRef.name=$API_KEY_SECRET" \
   --set-string "env[0].valueFrom.secretKeyRef.key=$API_KEY_SECRET_KEY" \
-  "${SEARCH_ARGS[@]}" \
+  "${SEARCH_ARGS[@]}" "${IMAGE_ARGS[@]}" \
   --set-file "config.inline=$WORK/config.yaml" \
   --post-renderer "$ROOT/scripts/post-render.py" --wait --timeout 5m

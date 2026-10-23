@@ -23,6 +23,9 @@ Set these environment variables before running `scripts/deploy.sh`:
 | `OGX_ENDPOINT` | `${OGX_SERVICE}.${OGX_NAMESPACE}.svc.cluster.local:${OGX_PORT}` | OGX host:port override |
 | `OGX_APP_LABEL` | `ogx` | OGX pod selector's `app` value |
 | `OGX_INSTANCE_LABEL` | `ogx-distribution` | OGX pod selector's `app.kubernetes.io/instance` value |
+| `PRAXIS_IMAGE_REPO` | unset | Override `image.repository`; unset uses `configs/common-values.yaml` |
+| `PRAXIS_IMAGE_TAG` | unset | Override `image.tag`; clears the pinned digest so the tag takes effect |
+| `PRAXIS_IMAGE_DIGEST` | unset | Override `image.digest` (takes precedence over `PRAXIS_IMAGE_TAG`) |
 
 `INFERENCE_HOST` must be a hostname, without scheme or path. The default pipeline
 uses HTTPS and `/v1/chat/completions`; other transports or API paths require an
