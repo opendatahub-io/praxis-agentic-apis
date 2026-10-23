@@ -1,0 +1,167 @@
+# Walking-skeleton E2E.
+#
+# Manually dispatched (workflow_dispatch only). Proves the composition once:
+#   ogx-showroom provisions OGX on the shared ROSA cluster
+#   → scripts/deploy.sh installs praxis-gateway in front of it
+#   → tests/smoke.sh passes
+#   → cluster is always torn down again.
+#
+# Later phases refine this skeleton; keep it simple.
+#
+# Security:
+#   - No pull_request / pull_request_target triggers: secret-bearing runs are
+#     dispatch-only, on trusted refs.
+#   - Secrets are held by the protected GitHub Environment "cluster-e2e"
+#     (required reviewers) rather than repo level, where possible.
+#
+# Cross-repo serialization: the `concurrency` group only serializes runs
+# within THIS repo. The cross-repo mutex against ogx-showroom's own CI is
+# showroom's pre-flight clean-cluster wait, which runs inside the composite
+# action below.
+
+name: MVP E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      praxis_image:
+        description: 'praxis-ai image override, as repo:tag or repo@sha256:... (default: common-values.yaml pin)'
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    # Protected environment (create with required reviewers).
+    environment: cluster-e2e
+    concurrency:
+      group: openshift-cluster-1
+      cancel-in-progress: false
+    timeout-minutes: 90
+    steps:
+      - name: Checkout praxis-agentic-apis
+        # actions/checkout v4.1.7
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+
+      - name: Setup CI environment (ogx-showroom composite action)
+        id: showroom
+        # ogx-showroom @ main (pinned by SHA); provides oc/uv/helm, oc-login,
+        # values-local.yaml generation, and the pre-flight clean-cluster wait.
+        uses: opendatahub-io/ogx-showroom@af717da47182916d734ca739f7e6a5dc5ecb1270
+        with:
+          oc_server: ${{ secrets.OC_SERVER }}
+          oc_token: ${{ secrets.OC_TOKEN }}
+          env: |
+            SHOWROOM_PULL_SECRET=${{ secrets.SHOWROOM_PULL_SECRET }}
+            SHOWROOM_VLLM_URL=${{ vars.LITEMAAS_URL }}
+            SHOWROOM_VLLM_API_TOKEN=${{ secrets.LITEMAAS_API_KEY }}
+            SHOWROOM_INFERENCE_MODEL=${{ vars.LITEMAAS_INFERENCE_MODEL }}
+            SHOWROOM_VLLM_EMBEDDING_URL=${{ vars.LITEMAAS_URL }}
+            SHOWROOM_VLLM_EMBEDDING_API_TOKEN=${{ secrets.LITEMAAS_API_KEY }}
+            SHOWROOM_EMBEDDING_MODEL=${{ vars.LITEMAAS_EMBEDDING_MODEL }}
+            SHOWROOM_EMBEDDING_PROVIDER_MODEL_ID=${{ vars.LITEMAAS_EMBEDDING_MODEL }}
+
+      - name: Provision OGX (ogx-showroom)
+        run: |
+          "${{ steps.showroom.outputs.scripts_dir }}/setup.sh"
+          "${{ steps.showroom.outputs.scripts_dir }}/provision.sh"
+
+      - name: Deploy praxis-gateway
+        env:
+          NAMESPACE: praxis-ci
+          LITEMAAS_API_KEY: ${{ secrets.LITEMAAS_API_KEY }}
+          LITEMAAS_URL: ${{ vars.LITEMAAS_URL }}
+          PRAXIS_IMAGE: ${{ inputs.praxis_image }}
+        run: |
+          # deploy.sh needs PyYAML for its web-search config rewrite.
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+
+          # Backend credential Secret (deploy.sh expects it pre-existing).
+          oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
+          oc -n "$NAMESPACE" create secret generic openai \
+            --from-literal=OPENAI_API_KEY="$LITEMAAS_API_KEY" \
+            --overwrite
+
+          # Point the inference backend at LiteMaaS.
+          # LITEMAAS_URL is a full URL; INFERENCE_HOST must be a bare hostname.
+          host=${LITEMAAS_URL#https://}
+          host=${host%%/*}
+          INFERENCE_PORT=443
+          if [[ $host == *:* ]]; then
+            INFERENCE_PORT=${host##*:}
+            host=${host%%:*}
+          fi
+          export INFERENCE_HOST="$host" INFERENCE_PORT
+
+          # Optional praxis-ai image override.
+          # Accepts repo:tag or repo@sha256:...; tags are resolved to digests
+          # when skopeo is available, otherwise passed through (deploy.sh
+          # clears the pinned digest so a tag alone still takes effect).
+          if [[ -n "$PRAXIS_IMAGE" ]]; then
+            if [[ $PRAXIS_IMAGE == *@sha256:* ]]; then
+              export PRAXIS_IMAGE_REPO="${PRAXIS_IMAGE%@*}"
+              export PRAXIS_IMAGE_DIGEST="${PRAXIS_IMAGE#*@}"
+            else
+              repo="${PRAXIS_IMAGE%:*}"
+              tag="${PRAXIS_IMAGE##*:}"
+              if [[ -n "$tag" && "$tag" != "$PRAXIS_IMAGE" && "$repo" != "$PRAXIS_IMAGE" ]]; then
+                if command -v skopeo >/dev/null 2>&1; then
+                  if digest=$(skopeo inspect --format '{{.Digest}}' "docker://$PRAXIS_IMAGE"); then
+                    export PRAXIS_IMAGE_REPO="$repo" PRAXIS_IMAGE_DIGEST="$digest"
+                  else
+                    echo "skopeo digest resolution failed; falling back to tag"
+                    export PRAXIS_IMAGE_REPO="$repo" PRAXIS_IMAGE_TAG="$tag"
+                  fi
+                else
+                  export PRAXIS_IMAGE_REPO="$repo" PRAXIS_IMAGE_TAG="$tag"
+                fi
+              else
+                export PRAXIS_IMAGE_REPO="$PRAXIS_IMAGE"
+              fi
+            fi
+          fi
+
+          scripts/deploy.sh
+
+      - name: Smoke test (no inference calls)
+        env:
+          NAMESPACE: praxis-ci
+        run: tests/smoke.sh
+
+      - name: Debug - Capture OpenShift state
+        # WARNING: stdout only. Console output is auto-redacted; artifacts are not.
+        if: always()
+        run: |
+          echo -e "\n=== praxis-ci: Recent Events ==="
+          oc get events -n praxis-ci --sort-by='.lastTimestamp' \
+            -o custom-columns=TIME:.lastTimestamp,TYPE:.type,REASON:.reason,OBJECT:.involvedObject.name,MESSAGE:.message
+
+          echo -e "\n=== praxis-ci: All Resources ==="
+          oc get all -n praxis-ci
+
+          echo -e "\n=== praxis-ci: Pod Logs (last 50 lines) ==="
+          oc logs -n praxis-ci --tail=50 -l app.kubernetes.io/name=praxis-gateway || echo "No logs available"
+
+          echo -e "\n=== redhat-ods-applications: All Resources ==="
+          oc get all -n redhat-ods-applications
+
+          echo -e "\n=== redhat-ods-applications: Pod Logs (last 50 lines) ==="
+          oc logs -n redhat-ods-applications --tail=50 -l app=ogx || echo "No logs available"
+
+      - name: Cleanup praxis-gateway
+        if: always()
+        env:
+          NAMESPACE: praxis-ci
+        run: |
+          scripts/cleanup.sh
+          # Also remove the namespace so the credential Secret and any
+          # residues do not leak between runs.
+          oc delete namespace "$NAMESPACE" --ignore-not-found --timeout=120s
+
+      - name: Teardown OGX (ogx-showroom)
+        if: always()
+        run: |
+          "${{ steps.showroom.outputs.scripts_dir }}/unprovision.sh"
+          "${{ steps.showroom.outputs.scripts_dir }}/cleanup.sh"
