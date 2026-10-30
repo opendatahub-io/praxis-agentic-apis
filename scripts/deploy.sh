@@ -26,11 +26,23 @@ export MCP_SERVER_URL=${MCP_SERVER_URL:-http://mcp-test:3001/mcp}
 # precedence in the chart) would silently keep the default image.
 IMAGE_ARGS=()
 if [[ -n "${PRAXIS_IMAGE_REPO:-}" ]]; then
+  [[ "$PRAXIS_IMAGE_REPO" =~ ^[a-zA-Z0-9._/-]+$ ]] || {
+    echo "Invalid PRAXIS_IMAGE_REPO format: $PRAXIS_IMAGE_REPO" >&2
+    exit 1
+  }
   IMAGE_ARGS+=(--set-string "image.repository=$PRAXIS_IMAGE_REPO")
 fi
 if [[ -n "${PRAXIS_IMAGE_DIGEST:-}" ]]; then
+  [[ "$PRAXIS_IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+    echo "Invalid PRAXIS_IMAGE_DIGEST format: $PRAXIS_IMAGE_DIGEST" >&2
+    exit 1
+  }
   IMAGE_ARGS+=(--set-string "image.digest=$PRAXIS_IMAGE_DIGEST")
 elif [[ -n "${PRAXIS_IMAGE_TAG:-}" ]]; then
+  [[ "$PRAXIS_IMAGE_TAG" =~ ^[a-zA-Z0-9._-]+$ ]] || {
+    echo "Invalid PRAXIS_IMAGE_TAG format: $PRAXIS_IMAGE_TAG" >&2
+    exit 1
+  }
   IMAGE_ARGS+=(--set-string "image.tag=$PRAXIS_IMAGE_TAG")
   IMAGE_ARGS+=(--set image.digest=null)
 fi

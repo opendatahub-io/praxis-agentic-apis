@@ -65,8 +65,20 @@ jobs:
 
       - name: Provision OGX (ogx-showroom)
         run: |
-          "${{ steps.showroom.outputs.scripts_dir }}/setup.sh"
-          "${{ steps.showroom.outputs.scripts_dir }}/provision.sh"
+          scripts_dir="${{ steps.showroom.outputs.scripts_dir }}"
+          "$scripts_dir/setup.sh"
+          "$scripts_dir/provision.sh"
+
+          # Verify OGX is functional before switching to praxis mode
+          "$scripts_dir/test.sh" hello
+
+          # Switch OGX to unauthenticated mode for praxis-gateway (and remove external route)
+          helm upgrade ogx-rhoai "$scripts_dir/charts/ogx-rhoai" \
+            -n redhat-ods-applications \
+            -f "$scripts_dir/values-local.yaml" \
+            --set ogx.auth.enabled=false \
+            --set route.enabled=false \
+            --wait --timeout 5m
 
       - name: Deploy praxis-gateway
         env:
@@ -82,7 +94,7 @@ jobs:
           oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
           oc -n "$NAMESPACE" create secret generic openai \
             --from-literal=OPENAI_API_KEY="$LITEMAAS_API_KEY" \
-            --overwrite
+            --dry-run=client -o yaml | oc apply -f -
 
           # Point the inference backend at LiteMaaS.
           # LITEMAAS_URL is a full URL; INFERENCE_HOST must be a bare hostname.
@@ -155,13 +167,18 @@ jobs:
         env:
           NAMESPACE: praxis-ci
         run: |
-          scripts/cleanup.sh
+          rc=0
+          scripts/cleanup.sh || rc=$?
           # Also remove the namespace so the credential Secret and any
           # residues do not leak between runs.
-          oc delete namespace "$NAMESPACE" --ignore-not-found --timeout=120s
+          oc delete namespace "$NAMESPACE" --ignore-not-found --timeout=120s || rc=$?
+          exit "$rc"
 
       - name: Teardown OGX (ogx-showroom)
         if: always()
         run: |
-          "${{ steps.showroom.outputs.scripts_dir }}/unprovision.sh"
-          "${{ steps.showroom.outputs.scripts_dir }}/cleanup.sh"
+          scripts_dir="${{ steps.showroom.outputs.scripts_dir }}"
+          rc=0
+          "$scripts_dir/unprovision.sh" || rc=$?
+          "$scripts_dir/cleanup.sh" || rc=$?
+          exit "$rc"
