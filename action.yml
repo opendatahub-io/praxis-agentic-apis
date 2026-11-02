@@ -50,6 +50,11 @@ runs:
     - name: Install Helm
       # azure/setup-helm v4
       uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4
+      with:
+        # Pinned to Helm v3: Helm v4 removed script post-renderers
+        # ("--post-renderer <executable>" fails with "plugin ... not found"),
+        # which scripts/deploy.sh relies on.
+        version: v3.17.1
 
     - name: Login to OpenShift cluster
       if: inputs.oc_server != '' && inputs.oc_token != ''
