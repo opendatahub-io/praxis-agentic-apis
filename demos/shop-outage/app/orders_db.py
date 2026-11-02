@@ -7,7 +7,7 @@ import socketserver
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 CREDENTIALS = Path(os.environ.get("CREDENTIALS_DIR", "/etc/orders-db/credentials"))
@@ -15,7 +15,7 @@ HBA = 'Connection matched file "/var/lib/pgsql/data/pg_hba.conf" line 5: "host a
 
 
 def log(level, message, pid=None):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
     print(f"{ts} UTC [{pid or os.getpid()}] {level}:  {message}", flush=True)
 
 
@@ -51,7 +51,7 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     log("LOG", "starting PostgreSQL 16.4 on x86_64-redhat-linux-gnu, compiled by gcc 11.5.0, 64-bit")
     log("LOG", 'listening on IPv4 address "0.0.0.0", port 5432')
-    log("LOG", "database system was shut down at " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+    log("LOG", "database system was shut down at " + datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"))
     rotated = CREDENTIALS / "rotated-at"
     if rotated.exists():
         log("LOG", f'password for role "{credential("username")}" set from orders-db-credentials '

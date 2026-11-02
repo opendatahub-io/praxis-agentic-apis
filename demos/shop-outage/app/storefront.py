@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CHECKOUT_URL = os.environ["CHECKOUT_API_URL"]
@@ -28,7 +28,7 @@ def log(line):
 
 
 def access(method, path, status, rt, upstream=None):
-    ts = datetime.now(timezone.utc).strftime("%d/%b/%Y:%H:%M:%S +0000")
+    ts = datetime.now(UTC).strftime("%d/%b/%Y:%H:%M:%S +0000")
     ip = f"10.{random.randint(128, 131)}.{random.randint(0, 9)}.{random.randint(2, 250)}"
     line = f'{ip} - - [{ts}] "{method} {path} HTTP/1.1" {status} "{random.choice(AGENTS)}" rt={rt:.3f}'
     if upstream:
@@ -73,7 +73,7 @@ def report():
             s = dict(stats)
             stats.clear()
         level = "WARN" if s.get("5xx") else "INFO"
-        log(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {level} stats last 60s: "
+        log(f"{datetime.now(UTC).isoformat(timespec='seconds')} {level} stats last 60s: "
             f"requests={s.get('total', 0)} 2xx={s.get('2xx', 0)} 3xx={s.get('3xx', 0)} 5xx={s.get('5xx', 0)} "
             f"checkout={s.get('checkout', 0)} checkout_5xx={s.get('checkout_5xx', 0)}")
 
@@ -92,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    log(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} INFO storefront "
+    log(f"{datetime.now(UTC).isoformat(timespec='seconds')} INFO storefront "
         f"v{os.environ.get('APP_VERSION', 'dev')} listening on 0.0.0.0:8080, checkout upstream {CHECKOUT_URL}")
     threading.Thread(target=traffic, daemon=True).start()
     threading.Thread(target=report, daemon=True).start()

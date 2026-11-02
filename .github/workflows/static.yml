@@ -35,7 +35,9 @@ jobs:
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
 
       - name: Install lint tools
-        run: python3 -m pip install --quiet yamllint ruff
+        # ruff is pinned: rule sets evolve between releases and an unpinned
+        # install broke this gate once already (UP017 in the demo app).
+        run: python3 -m pip install --quiet yamllint 'ruff==0.17.3'
 
       - name: Install actionlint
         run: |
