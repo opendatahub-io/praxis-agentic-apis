@@ -35,7 +35,7 @@ tests:
     tags: [mcp, paid]
     name: MCP tool calls - paid inference
     type: shell
-    description: MCP discovery and echo tool execution via the mcp-test server (applied by e2e.sh)
+    description: MCP discovery and tool execution via the OpenShift MCP server (or the everything test-server fallback; e2e.sh picks and provisions the fixture)
 
   - path: tests/web-search.sh
     tags: [websearch, paid]
