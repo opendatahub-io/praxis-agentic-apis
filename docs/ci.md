@@ -113,6 +113,7 @@ CI runs ([static.yml](../.github/workflows/static.yml)):
 $ make tools   # one-time: install pinned yamllint + ruff (pip) and actionlint
 $ make lint    # shellcheck + yamllint + actionlint + ruff
 $ make render  # chart render dry-run (needs helm; no cluster writes)
+$ make render-check  # render contract test (web-search filter toggles)
 ```
 
 Tool versions are pinned in the `Makefile` (single source of truth — the
