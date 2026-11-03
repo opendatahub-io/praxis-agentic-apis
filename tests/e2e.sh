@@ -9,7 +9,8 @@
 # Levels (cumulative tag sets, manifest order = run order):
 #   smoke      free tier only (no inference calls)
 #   functional + Responses API (paid inference)
-#   mcp        + MCP tool calls (applies the mcp-test fixture)
+#   mcp        + MCP tool calls (fixture: OpenShift MCP server, or the
+#              everything test server as fallback)
 #   websearch  + web search (SKIP unless the gateway was deployed with
 #              WEB_SEARCH=true, i.e. global.webSearch.enabled)
 #   full       everything
@@ -18,9 +19,12 @@
 #   NAMESPACE RELEASE MODEL EMBEDDING_MODEL VECTOR_STORE_PROVIDER
 #   OGX_ENDPOINT OGX_NAMESPACE OGX_SERVICE OGX_PORT MCP_SERVER_URL
 #   INFERENCE_HOST INFERENCE_PORT
+#   MCP                mcp tier fixture: auto (default) | openshift | everything
 #   DEPLOY=true        helm-install charts/praxis-agentic-apis first (the
 #                      caller must export OPENAI_API_KEY for the backend
-#                      credential Secret; see docs/configuration.md)
+#                      credential Secret; see docs/configuration.md); with
+#                      the mcp tier, the resolved fixture's MCP_SERVER_URL is
+#                      passed through
 #   WEB_SEARCH=true    with DEPLOY=true, install with global.webSearch.enabled
 #   SKIP_CLEANUP=true  leave the deployment in place after the run (dev
 #                      iteration; default is to always clean up)
@@ -32,6 +36,9 @@ NAMESPACE=${NAMESPACE:-praxis-standalone}
 RELEASE=${RELEASE:-praxis-gateway}
 DEPLOY=${DEPLOY:-false}
 SKIP_CLEANUP=${SKIP_CLEANUP:-false}
+# mcp tier fixture: auto (try OpenShift MCP, fall back to the everything test
+# server), openshift (require it) or everything (skip the OpenShift MCP).
+MCP=${MCP:-auto}
 
 case "$LEVEL" in
   smoke) TAGS=smoke ;;
@@ -47,6 +54,10 @@ esac
 case "$DEPLOY$SKIP_CLEANUP" in
   truetrue | truefalse | falsetrue | falsefalse) ;;
   *) echo 'DEPLOY and SKIP_CLEANUP must be true or false' >&2; exit 1 ;;
+esac
+case "$MCP" in
+  auto | openshift | everything) ;;
+  *) echo "MCP must be one of: auto openshift everything (got: $MCP)" >&2; exit 1 ;;
 esac
 
 for tool in oc helm python3; do
@@ -79,13 +90,44 @@ require_reason() {
   esac
 }
 
-MCP_FIXTURE_APPLIED=false
+MCP_FIXTURE=
+
+# Resolve the mcp tier's fixture before deploy: the OpenShift MCP server's
+# URL must be baked into the gateway config (MCP_SERVER_URL) at deploy time.
+# The everything fallback URL is the mcp-test fixture's.
+resolve_mcp_fixture() {
+  if [[ $MCP == everything ]]; then
+    MCP_FIXTURE=everything
+  elif url=$(NAMESPACE="$NAMESPACE" scripts/provision-mcp.sh prepare); then
+    export MCP_SERVER_URL="$url"
+    export MCP_TEST=openshift
+    MCP_FIXTURE=openshift
+  elif [[ $MCP == openshift ]]; then
+    echo "MCP=openshift requested but OpenShift MCP provisioning failed" >&2
+    exit 1
+  else
+    echo "mcp: OpenShift MCP unavailable; falling back to the everything test server" >&2
+    MCP_FIXTURE=everything
+  fi
+
+  if [[ $MCP_FIXTURE == everything ]]; then
+    export MCP_TEST=everything
+    oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f - >&2
+    oc apply -f infra/mcp/everything/deployment.yaml -n "$NAMESPACE" >&2
+  fi
+  if [[ $DEPLOY != true ]]; then
+    echo "mcp: DEPLOY=false — the gateway must already be deployed with MCP_SERVER_URL=${MCP_SERVER_URL:-http://mcp-test:3001/mcp}" >&2
+  fi
+}
 
 cleanup() {
   local rc=$? c=0
   if [[ $SKIP_CLEANUP != true ]]; then
+    # helm uninstall also removes the chart-managed OpenShift MCPServer when
+    # the openshift fixture is in use; only the everything fixture is
+    # harness-owned and deleted explicitly.
     helm uninstall "$RELEASE" -n "$NAMESPACE" --wait --timeout 120s || c=$?
-    if [[ $MCP_FIXTURE_APPLIED == true ]]; then
+    if [[ $MCP_FIXTURE == everything ]]; then
       oc delete -f infra/mcp/everything/deployment.yaml -n "$NAMESPACE" \
         --ignore-not-found || c=$?
     fi
@@ -98,15 +140,18 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+if [[ $LEVEL == mcp || $LEVEL == full ]]; then
+  resolve_mcp_fixture
+fi
+
 if [[ $DEPLOY == true ]]; then
   # Helm-based deploy (mirrors .github/workflows/mvp.yml): the chart composes
-  # praxis-gateway with PostgreSQL and NetworkPolicies; the mcp-test fixture
-  # is applied first so the gateway can reach it, and the in-chart OpenShift
-  # MCP is disabled in favour of the fixture.
-  if [[ $LEVEL == mcp || $LEVEL == full ]]; then
-    oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
+  # praxis-gateway with PostgreSQL and NetworkPolicies. With the everything
+  # fixture the in-chart OpenShift MCP is disabled and the gateway points at
+  # the harness-applied mcp-test server; with the openshift fixture the chart
+  # deploys the MCPServer itself (default) using the resolved URL.
+  if [[ $MCP_FIXTURE == everything ]]; then
     oc apply -f infra/mcp/everything/deployment.yaml -n "$NAMESPACE"
-    MCP_FIXTURE_APPLIED=true
   fi
   oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
   oc -n "$NAMESPACE" create secret generic openai \
@@ -117,14 +162,20 @@ if [[ $DEPLOY == true ]]; then
     --set-string "global.inference.host=${INFERENCE_HOST:-litemaas.example.com}"
     --set "global.inference.port=${INFERENCE_PORT:-443}"
     --set-string "global.mcp.serverUrl=${MCP_SERVER_URL:-http://mcp-test:3001/mcp}"
-    --set "openshiftMcp.enabled=false"
   )
+  if [[ $MCP_FIXTURE == everything ]]; then
+    args+=(--set "openshiftMcp.enabled=false")
+  fi
   if [[ ${WEB_SEARCH:-false} == true ]]; then
     args+=(--set "global.webSearch.enabled=true")
   fi
   helm dependency build charts/praxis-agentic-apis
   helm upgrade --install "$RELEASE" charts/praxis-agentic-apis \
     --namespace "$NAMESPACE" "${args[@]}" --wait --timeout 5m
+  if [[ $MCP_FIXTURE == openshift ]]; then
+    # Wait for the chart-deployed MCPServer before running the mcp tier.
+    scripts/provision-mcp.sh wait
+  fi
 fi
 
 echo "=========================================="
