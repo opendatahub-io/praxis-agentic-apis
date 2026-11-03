@@ -4,7 +4,8 @@ Demonstration of the Responses API, Conversations, and agentic tool loop
 using standalone Praxis. Inference uses an OpenAI-compatible HTTPS Chat
 Completions backend. Files, Vector Stores, and hosted file search
 require an existing OGX deployment.
-Optional hosted web search uses Brave Search.
+Optional hosted web search uses Brave Search. Responses and Conversations
+are stored in PostgreSQL, deployed alongside Praxis by default.
 
 This is an **unauthenticated, single-user preview, not for production**. All
 requests share the fixed owner `praxis-standalone`. The API is accessible from
@@ -18,6 +19,8 @@ pods in its namespace or through port-forwarding. No public Route is configured.
 - OGX with Files/Vector Stores, an embedding model, and a vector store provider.
 - Permission to install in the target namespace and manage NetworkPolicies in
   both the target and OGX namespaces.
+- A default StorageClass for the in-repo PostgreSQL volume, or an existing
+  PostgreSQL database (see [storage](docs/configuration.md#storage-and-upgrades)).
 
 OGX and inference backends are not installed by this repository.
 
@@ -51,12 +54,16 @@ unset OPENAI_API_KEY
 bash ./scripts/deploy.sh
 ```
 
-The installer ensures the Praxis namespace exists, then creates or updates
-NetworkPolicies before installing the published Helm chart:
+The installer ensures the Praxis namespace exists, deploys PostgreSQL from
+`infra/postgres/` (generating its credential Secret `${RELEASE}-postgres` on first
+run), then creates or updates NetworkPolicies before installing the published
+Helm chart:
 - `${RELEASE}-ingress` allows only same-namespace pods to reach this release's
   Praxis pods on port 8080. Egress is unchanged; port-forwarding remains available.
 - `${RELEASE}-ogx` permits this release's pods to reach the selected OGX pods
   on `OGX_PORT` in the OGX namespace.
+- `${RELEASE}-postgres` allows only this release's Praxis pods to reach
+  PostgreSQL on port 5432.
 
 Existing policies are not edited; their allowed traffic remains allowed. Adding
 an ingress policy can restrict previously unisolated pods, so review the target
@@ -64,7 +71,9 @@ labels first. Namespace isolation is not authentication: all allowed callers
 share the same Praxis identity and data.
 
 See [configuration](docs/configuration.md) for deployment settings, selecting
-multiple configs, the pinned chart/image, and storage/upgrade behavior.
+multiple configs, the pinned chart/image, and storage/upgrade behavior,
+including using an external PostgreSQL (`DATABASE_HOST`) or SQLite
+(`STORE_BACKEND=sqlite`).
 
 The default config is `configs/openai-ogx/`, with shared Helm defaults in
 `configs/common-values.yaml`. Select another directory with `CONFIG_DIR`:
@@ -95,8 +104,7 @@ ENABLE_WEB_SEARCH=true bash ./scripts/deploy.sh
 All callers share this key and its billing account. Requests opt into search with
 `tools: [{"type":"web_search"}]`. Praxis executes Brave searches and feeds results
 back to the model through the agentic loop. To disable search, redeploy without
-`ENABLE_WEB_SEARCH=true`; the Secret is left in place. Redeploying replaces the
-pod and discards SQLite state.
+`ENABLE_WEB_SEARCH=true`; the Secret is left in place.
 
 ### MCP server
 
@@ -199,6 +207,17 @@ It makes two Responses requests, normally four inference calls, plus Brave
 searches. It checks buffered/streaming search loops, returned source URLs, and
 stored response retrieval. It uses the same local ports as the other tests.
 
+To validate that state survives a Praxis restart, run the persistence test. It
+makes one paid Responses request in a Conversation, runs `oc rollout restart`
+on the Praxis Deployment, waits for the old pod to be deleted, then checks that
+the Conversation, its items, and the stored Response are unchanged:
+
+```bash
+MODEL=gpt-6-luna bash ./tests/persistence.sh
+```
+
+It fails with `STORE_BACKEND=sqlite`, which loses state when the pod is replaced.
+
 Tests delete resources they create and stop port-forwarding on exit, including
 on failure. Check cleanup errors for resources needing manual deletion. Request
 and response artifacts remain in `.cache/` and should not be committed.
@@ -212,7 +231,14 @@ context as installation:
 bash ./scripts/cleanup.sh
 ```
 
-This removes the Helm release and its OGX NetworkPolicy, discarding SQLite
-state. It is safe to rerun when either resource is already absent. The namespace,
-credential Secret, existing OGX deployment, and local `.cache/` artifacts remain
-in place. Files and Vector Stores stored in OGX are not deleted.
+This removes the Helm release, its OGX NetworkPolicy, and the in-repo
+PostgreSQL Deployment, Service, and NetworkPolicy. It is safe to rerun when
+resources are already absent. The PostgreSQL volume and its Secret are kept, so
+reinstalling restores stored Responses and Conversations; to delete them too:
+
+```bash
+PURGE_DATABASE=true bash ./scripts/cleanup.sh
+```
+
+The namespace, credential Secrets, existing OGX deployment, external databases,
+and local `.cache/` artifacts remain in place. Files and Vector Stores stored in OGX are not deleted.

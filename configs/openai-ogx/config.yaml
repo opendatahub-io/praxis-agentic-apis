@@ -84,16 +84,22 @@ filter_chains:
 
       - filter: openai_tool_parse
 
+      # deploy.sh renders the PostgreSQL URL and TLS mode, or rewrites both stores
+      # to SQLite when STORE_BACKEND=sqlite. The password comes from PGPASSWORD.
       - filter: openai_conversations
-        backend: sqlite
-        database_url: "sqlite:///var/lib/praxis/responses.db?mode=rwc"
+        backend: postgres
+        database_url: "${DATABASE_URL}"
+        ssl_mode: ${DATABASE_SSL_MODE}
+        allow_private_database_url: true
         conversations_table: openai_conversations
         items_table: openai_conversation_items
 
       # Stores run before IRR so the reverse response path persists composed SSE.
       - filter: openai_responses_store
-        backend: sqlite
-        database_url: "sqlite:///var/lib/praxis/responses.db?mode=rwc"
+        backend: postgres
+        database_url: "${DATABASE_URL}"
+        ssl_mode: ${DATABASE_SSL_MODE}
+        allow_private_database_url: true
         responses_table: openai_responses
         conversations_table: openai_conversations
 
