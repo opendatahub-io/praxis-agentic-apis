@@ -16,7 +16,7 @@
 #                   (default 300)
 #
 # API-version handling: the manifest targets mcp.x-k8s.io/v1beta1 (condition
-# Verified, spec.network.ingressFrom). RHOAI 3.6 EA clusters serve v1alpha1
+# Verified, spec.network.ingressFrom). RHOAI 3.6.0 (GA) clusters serve v1alpha1
 # (conditions Accepted/Ready, no spec.network); for those the manifest is
 # converted on the fly — apiVersion rewritten, spec.network dropped — and the
 # Ready condition is awaited instead.
