@@ -9,6 +9,7 @@ VALUES_FILE=${VALUES_FILE:-$CONFIG_DIR/values.yaml}
 API_KEY_SECRET=${API_KEY_SECRET:-openai}
 API_KEY_SECRET_KEY=${API_KEY_SECRET_KEY:-OPENAI_API_KEY}
 ENABLE_WEB_SEARCH=${ENABLE_WEB_SEARCH:-false}
+DRY_RUN=${DRY_RUN:-false}
 WEB_SEARCH_API_KEY_SECRET=${WEB_SEARCH_API_KEY_SECRET:-brave-search}
 WEB_SEARCH_API_KEY_SECRET_KEY=${WEB_SEARCH_API_KEY_SECRET_KEY:-WEB_SEARCH_API_KEY}
 OGX_NAMESPACE=${OGX_NAMESPACE:-redhat-ods-applications}
@@ -47,12 +48,18 @@ elif [[ -n "${PRAXIS_IMAGE_TAG:-}" ]]; then
   IMAGE_ARGS+=(--set image.digest=null)
 fi
 
-for tool in oc helm python3 envsubst; do
+for tool in python3 envsubst helm; do
   command -v "$tool" >/dev/null
 done
+# Render-only mode needs no cluster access.
+[[ $DRY_RUN == true ]] || command -v oc >/dev/null
 python3 -c 'import yaml'
 [[ $ENABLE_WEB_SEARCH == true || $ENABLE_WEB_SEARCH == false ]] || {
   echo 'ENABLE_WEB_SEARCH must be true or false' >&2
+  exit 1
+}
+[[ $DRY_RUN == true || $DRY_RUN == false ]] || {
+  echo 'DRY_RUN must be true or false' >&2
   exit 1
 }
 [[ -r "$CONFIG_FILE" && -r "$CONFIG_DIR/values.yaml" && -r "$VALUES_FILE" ]]
@@ -85,6 +92,38 @@ with open(sys.argv[1]) as source:
 with open(sys.argv[1], "w") as target:
     yaml.safe_dump(config, target, sort_keys=False)
 PY
+fi
+
+# Helm 4 requires post-renderers to be typed plugins (postrenderer/v1) and
+# rejects an executable path ("plugin ... not found"); Helm 3 only accepts an
+# executable path. Support both: install the bundled plugin for Helm 4, fall
+# back to the script path for Helm 3.
+POST_RENDER_PLUGIN=praxis-post-render
+POST_RENDER_SCRIPT="$ROOT/scripts/helm-plugins/$POST_RENDER_PLUGIN/post-render.py"
+if helm version --short | grep -qE '^v?[4-9]'; then
+  helm plugin list | awk '{print $1}' | grep -qx "$POST_RENDER_PLUGIN" ||
+    helm plugin install "${POST_RENDER_SCRIPT%/*}"
+  POST_RENDERER_ARGS=(--post-renderer "$POST_RENDER_PLUGIN")
+else
+  POST_RENDERER_ARGS=(--post-renderer "$POST_RENDER_SCRIPT")
+fi
+
+if [[ $DRY_RUN == true ]]; then
+  # Render-only mode: print the manifests deploy.sh would apply (with the
+  # effective config, web-search filter applied or not) and exit before any
+  # cluster mutation. Used by the render contract test
+  # (.github/scripts/render-check.sh, `make render-check`).
+  helm template "$RELEASE" \
+    oci://ghcr.io/praxis-proxy/charts/praxis-gateway --version 0.2.1 \
+    --namespace "$NAMESPACE" \
+    -f "$ROOT/configs/common-values.yaml" -f "$CONFIG_DIR/values.yaml" -f "$VALUES_FILE" \
+    --set-string "fullnameOverride=$RELEASE" \
+    --set-string "env[0].valueFrom.secretKeyRef.name=$API_KEY_SECRET" \
+    --set-string "env[0].valueFrom.secretKeyRef.key=$API_KEY_SECRET_KEY" \
+    "${SEARCH_ARGS[@]}" "${IMAGE_ARGS[@]}" \
+    --set-file "config.inline=$WORK/config.yaml" \
+    "${POST_RENDERER_ARGS[@]}"
+  exit 0
 fi
 
 oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
@@ -138,20 +177,6 @@ spec:
         - protocol: TCP
           port: ${OGX_PORT}
 YAML
-
-# Helm 4 requires post-renderers to be typed plugins (postrenderer/v1) and
-# rejects an executable path ("plugin ... not found"); Helm 3 only accepts an
-# executable path. Support both: install the bundled plugin for Helm 4, fall
-# back to the script path for Helm 3.
-POST_RENDER_PLUGIN=praxis-post-render
-POST_RENDER_SCRIPT="$ROOT/scripts/helm-plugins/$POST_RENDER_PLUGIN/post-render.py"
-if helm version --short | grep -qE '^v?[4-9]'; then
-  helm plugin list | awk '{print $1}' | grep -qx "$POST_RENDER_PLUGIN" ||
-    helm plugin install "${POST_RENDER_SCRIPT%/*}"
-  POST_RENDERER_ARGS=(--post-renderer "$POST_RENDER_PLUGIN")
-else
-  POST_RENDERER_ARGS=(--post-renderer "$POST_RENDER_SCRIPT")
-fi
 
 helm upgrade --install "$RELEASE" \
   oci://ghcr.io/praxis-proxy/charts/praxis-gateway --version 0.2.1 \
