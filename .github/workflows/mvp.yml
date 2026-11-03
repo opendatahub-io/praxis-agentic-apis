@@ -72,17 +72,31 @@ jobs:
           # Verify OGX is functional before switching to praxis mode
           "$scripts_dir/test.sh" hello
 
-          # Switch OGX to unauthenticated mode for praxis-gateway (and remove external route)
+          # Remove the external Route: OGX is internal-only from here on
+          # (praxis-gateway fronts it).
           helm upgrade ogx-rhoai "$scripts_dir/charts/ogx-rhoai" \
             -n redhat-ods-applications \
             -f "$scripts_dir/values-local.yaml" \
-            --set ogx.auth.enabled=false \
             --set route.enabled=false \
             --wait --timeout 5m
 
+          # Switch OGX to praxis-fronted mode via the OGXServer CRD: auth
+          # switches to upstream_header (identity injected by praxis-gateway)
+          # and ingress is restricted by NetworkPolicy to the praxis-gateway
+          # pods (default peer: app.kubernetes.io/name=praxis-gateway in the
+          # praxis-standalone namespace).
+          oc -n redhat-ods-applications patch ogxserver ogx-distribution --type merge \
+            -p '{"spec":{"praxisMode":{"enabled":true}}}'
+
+          # Wait for the operator to reconcile the new mode and roll out.
+          oc -n redhat-ods-applications wait --for=jsonpath='{.status.phase}'=Ready \
+            ogxserver/ogx-distribution --timeout=300s
+          oc -n redhat-ods-applications rollout status deployment/ogx-distribution \
+            --timeout=300s
+
       - name: Deploy praxis-gateway
         env:
-          NAMESPACE: praxis-ci
+          NAMESPACE: praxis-standalone
           LITEMAAS_API_KEY: ${{ secrets.LITEMAAS_API_KEY }}
           LITEMAAS_URL: ${{ vars.LITEMAAS_URL }}
           PRAXIS_IMAGE: ${{ inputs.praxis_image }}
@@ -139,22 +153,22 @@ jobs:
 
       - name: Smoke test (no inference calls)
         env:
-          NAMESPACE: praxis-ci
+          NAMESPACE: praxis-standalone
         run: tests/smoke.sh
 
       - name: Debug - Capture OpenShift state
         # WARNING: stdout only. Console output is auto-redacted; artifacts are not.
         if: always()
         run: |
-          echo -e "\n=== praxis-ci: Recent Events ==="
-          oc get events -n praxis-ci --sort-by='.lastTimestamp' \
+          echo -e "\n=== praxis-standalone: Recent Events ==="
+          oc get events -n praxis-standalone --sort-by='.lastTimestamp' \
             -o custom-columns=TIME:.lastTimestamp,TYPE:.type,REASON:.reason,OBJECT:.involvedObject.name,MESSAGE:.message
 
-          echo -e "\n=== praxis-ci: All Resources ==="
-          oc get all -n praxis-ci
+          echo -e "\n=== praxis-standalone: All Resources ==="
+          oc get all -n praxis-standalone
 
-          echo -e "\n=== praxis-ci: Pod Logs (last 50 lines) ==="
-          oc logs -n praxis-ci --tail=50 -l app.kubernetes.io/name=praxis-gateway || echo "No logs available"
+          echo -e "\n=== praxis-standalone: Pod Logs (last 50 lines) ==="
+          oc logs -n praxis-standalone --tail=50 -l app.kubernetes.io/name=praxis-gateway || echo "No logs available"
 
           echo -e "\n=== redhat-ods-applications: All Resources ==="
           oc get all -n redhat-ods-applications
@@ -165,7 +179,7 @@ jobs:
       - name: Cleanup praxis-gateway
         if: always()
         env:
-          NAMESPACE: praxis-ci
+          NAMESPACE: praxis-standalone
         run: |
           rc=0
           scripts/cleanup.sh || rc=$?
