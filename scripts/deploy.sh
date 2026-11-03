@@ -9,6 +9,7 @@ VALUES_FILE=${VALUES_FILE:-$CONFIG_DIR/values.yaml}
 API_KEY_SECRET=${API_KEY_SECRET:-openai}
 API_KEY_SECRET_KEY=${API_KEY_SECRET_KEY:-OPENAI_API_KEY}
 ENABLE_WEB_SEARCH=${ENABLE_WEB_SEARCH:-false}
+DRY_RUN=${DRY_RUN:-false}
 WEB_SEARCH_API_KEY_SECRET=${WEB_SEARCH_API_KEY_SECRET:-brave-search}
 WEB_SEARCH_API_KEY_SECRET_KEY=${WEB_SEARCH_API_KEY_SECRET_KEY:-WEB_SEARCH_API_KEY}
 OGX_NAMESPACE=${OGX_NAMESPACE:-redhat-ods-applications}
@@ -58,9 +59,11 @@ elif [[ -n "${PRAXIS_IMAGE_TAG:-}" ]]; then
   IMAGE_ARGS+=(--set image.digest=null)
 fi
 
-for tool in oc helm python3 envsubst; do
+for tool in python3 envsubst helm; do
   command -v "$tool" >/dev/null
 done
+# Render-only mode needs no cluster access.
+[[ $DRY_RUN == true ]] || command -v oc >/dev/null
 python3 -c 'import yaml'
 [[ $ENABLE_WEB_SEARCH == true || $ENABLE_WEB_SEARCH == false ]] || {
   echo 'ENABLE_WEB_SEARCH must be true or false' >&2
@@ -70,12 +73,16 @@ python3 -c 'import yaml'
   echo 'DATABASE_SSL_MODE must be disable, prefer, require, verify-ca, or verify-full' >&2
   exit 1
 }
+[[ $DRY_RUN == true || $DRY_RUN == false ]] || {
+  echo 'DRY_RUN must be true or false' >&2
+  exit 1
+}
 [[ -r "$CONFIG_FILE" && -r "$CONFIG_DIR/values.yaml" && -r "$VALUES_FILE" ]]
 WORK=$(mktemp -d)
 trap 'rm -f "$WORK/config.yaml"; rmdir "$WORK"' EXIT
 
-oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
-if [[ $ENABLE_WEB_SEARCH == true &&
+[[ $DRY_RUN == true ]] || oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
+if [[ $DRY_RUN == false && $ENABLE_WEB_SEARCH == true &&
   -z $(oc -n "$NAMESPACE" get secret "$WEB_SEARCH_API_KEY_SECRET" --ignore-not-found \
     -o jsonpath="{.data.${WEB_SEARCH_API_KEY_SECRET_KEY//./\\.}}") ]]; then
   echo "Secret $WEB_SEARCH_API_KEY_SECRET with nonempty key $WEB_SEARCH_API_KEY_SECRET_KEY is required in $NAMESPACE" >&2
@@ -103,20 +110,26 @@ if [[ -z $DATABASE_HOST ]]; then
   # initialized with its credentials.
   DATABASE_SECRET=$RELEASE-postgres
   DATABASE_SECRET_KEY=POSTGRESQL_PASSWORD
-  if [[ -z $(secret_value "$DATABASE_SECRET" POSTGRESQL_PASSWORD) ]]; then
-    oc -n "$NAMESPACE" create secret generic "$DATABASE_SECRET" \
-      --from-literal=POSTGRESQL_USER="$DATABASE_USER" \
-      --from-literal=POSTGRESQL_DATABASE="$DATABASE_NAME" \
-      --from-file=POSTGRESQL_PASSWORD=<(python3 -c 'import secrets; print(secrets.token_hex(24), end="")')
+  if [[ $DRY_RUN == true ]]; then
+    # Render-only: render what a fresh install would apply, so keep the
+    # default user/database and the would-be in-repo service host.
+    DATABASE_HOST=$RELEASE-postgres.$NAMESPACE.svc.cluster.local
+  else
+    if [[ -z $(secret_value "$DATABASE_SECRET" POSTGRESQL_PASSWORD) ]]; then
+      oc -n "$NAMESPACE" create secret generic "$DATABASE_SECRET" \
+        --from-literal=POSTGRESQL_USER="$DATABASE_USER" \
+        --from-literal=POSTGRESQL_DATABASE="$DATABASE_NAME" \
+        --from-file=POSTGRESQL_PASSWORD=<(python3 -c 'import secrets; print(secrets.token_hex(24), end="")')
+    fi
+    DATABASE_USER=$(secret_value "$DATABASE_SECRET" POSTGRESQL_USER)
+    DATABASE_NAME=$(secret_value "$DATABASE_SECRET" POSTGRESQL_DATABASE)
+    DATABASE_HOST=$RELEASE-postgres.$NAMESPACE.svc.cluster.local
+    RELEASE=$RELEASE DATABASE_PORT=$DATABASE_PORT \
+      envsubst "\${RELEASE} \${DATABASE_PORT}" <"$ROOT/infra/postgres/postgres.yaml" |
+      oc -n "$NAMESPACE" apply -f -
+    oc -n "$NAMESPACE" rollout status "deployment/$RELEASE-postgres" --timeout=5m
   fi
-  DATABASE_USER=$(secret_value "$DATABASE_SECRET" POSTGRESQL_USER)
-  DATABASE_NAME=$(secret_value "$DATABASE_SECRET" POSTGRESQL_DATABASE)
-  DATABASE_HOST=$RELEASE-postgres.$NAMESPACE.svc.cluster.local
-  RELEASE=$RELEASE DATABASE_PORT=$DATABASE_PORT \
-    envsubst "\${RELEASE} \${DATABASE_PORT}" <"$ROOT/infra/postgres/postgres.yaml" |
-    oc -n "$NAMESPACE" apply -f -
-  oc -n "$NAMESPACE" rollout status "deployment/$RELEASE-postgres" --timeout=5m
-elif [[ -z $(secret_value "$DATABASE_SECRET" "$DATABASE_SECRET_KEY") ]]; then
+elif [[ $DRY_RUN == false && -z $(secret_value "$DATABASE_SECRET" "$DATABASE_SECRET_KEY") ]]; then
   echo "Secret $DATABASE_SECRET with nonempty key $DATABASE_SECRET_KEY is required in $NAMESPACE" >&2
   exit 1
 fi
@@ -153,6 +166,24 @@ with open(path) as source:
 with open(path, "w") as target:
     yaml.safe_dump(config, target, sort_keys=False)
 PY
+
+if [[ $DRY_RUN == true ]]; then
+  # Render-only mode: print the manifests deploy.sh would apply (with the
+  # effective config, web-search filter applied or not) and exit before any
+  # cluster mutation (no namespace, secrets, PostgreSQL, or NetworkPolicies).
+  # Used by the render contract test (.github/scripts/render-check.sh,
+  # `make render-check`).
+  helm template "$RELEASE" \
+    oci://ghcr.io/praxis-proxy/charts/praxis-gateway --version 0.2.1 \
+    --namespace "$NAMESPACE" \
+    -f "$ROOT/configs/common-values.yaml" -f "$CONFIG_DIR/values.yaml" -f "$VALUES_FILE" \
+    --set-string "fullnameOverride=$RELEASE" \
+    --set-string "env[0].valueFrom.secretKeyRef.name=$API_KEY_SECRET" \
+    --set-string "env[0].valueFrom.secretKeyRef.key=$API_KEY_SECRET_KEY" \
+    "${ENV_ARGS[@]}" "${IMAGE_ARGS[@]}" \
+    --set-file "config.inline=$WORK/config.yaml"
+  exit 0
+fi
 
 oc apply -f - <<YAML
 apiVersion: networking.k8s.io/v1
