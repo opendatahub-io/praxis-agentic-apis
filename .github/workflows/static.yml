@@ -8,6 +8,9 @@
 #   lint   — shellcheck, yamllint, actionlint (workflows + composite action), ruff
 #   render — chart render dry-run mirroring scripts/deploy.sh's render path
 #            (envsubst -> helm template -> post-renderer), no cluster writes.
+#
+# Both jobs call the Makefile targets (`make tools`, `make lint`, `make
+# render`) so developers can run the exact same commands locally.
 
 name: Static validation
 
@@ -34,42 +37,13 @@ jobs:
         # actions/checkout v4.1.7
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
 
-      - name: Install lint tools
-        # ruff is pinned: rule sets evolve between releases and an unpinned
-        # install broke this gate once already (UP017 in the demo app).
-        run: python3 -m pip install --quiet yamllint 'ruff==0.17.3'
+      - name: Install lint tools (make tools)
+        run: make tools
 
-      - name: Install actionlint
+      - name: Lint (make lint)
         run: |
-          # actionlint v1.7.12
-          curl -sSL -o /tmp/actionlint.tar.gz \
-            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/actionlint.tar.gz -C /usr/local/bin actionlint
-
-      - name: shellcheck
-        run: |
-          rc=0
-          while IFS= read -r script; do
-            echo "shellcheck: $script"
-            shellcheck "$script" || rc=1
-          done < <(find scripts tests demos .github/scripts -name '*.sh' -type f | sort)
-          exit "$rc"
-
-      - name: yamllint
-        run: yamllint --strict configs/ demos/shop-outage/manifests/ .github/workflows/ action.yml .yamllint.yaml
-
-      - name: actionlint
-        run: |
-          actionlint
-          # actionlint auto-detects workflows and .github/actions/*/action.yml,
-          # but not a repo-root action.yml. Lint it via the detected location.
-          mkdir -p .github/actions/root
-          cp action.yml .github/actions/root/action.yml
-          actionlint
-
-      - name: ruff
-        run: ruff check scripts/post-render.py demos/shop-outage/sre-assistant demos/shop-outage/app/
+          # make tools installs actionlint into ~/.local/bin.
+          PATH="$HOME/.local/bin:$PATH" make lint
 
   render:
     runs-on: ubuntu-latest
@@ -85,35 +59,5 @@ jobs:
       - name: Setup CI environment (secret-free dry run)
         uses: ./
 
-      - name: Install PyYAML (post-renderer dependency)
-        run: python3 -m pip install --quiet pyyaml
-
       - name: Render chart (no cluster writes)
-        env:
-          # Same defaults scripts/deploy.sh uses (nothing cluster-specific).
-          OGX_ENDPOINT: ogx-distribution-service.redhat-ods-applications.svc.cluster.local:8321
-          INFERENCE_HOST: litemaas.example.com
-          INFERENCE_PORT: "443"
-          MCP_SERVER_URL: http://openshift-mcp:8080/mcp
-        run: |
-          work="$(mktemp -d)"
-          # Mirror deploy.sh's render path: envsubst the config, then template
-          # the chart with the same values + post-renderer it would install.
-          # shellcheck disable=SC2016  # literal ${VAR} list is intentional
-          envsubst '${OGX_ENDPOINT} ${INFERENCE_HOST} ${INFERENCE_PORT} ${MCP_SERVER_URL}' \
-            < configs/openai-ogx/config.yaml > "$work/config.yaml"
-
-          helm template praxis-gateway \
-            oci://ghcr.io/praxis-proxy/charts/praxis-gateway --version 0.2.1 \
-            -f configs/common-values.yaml -f configs/openai-ogx/values.yaml \
-            --set-string fullnameOverride=praxis-gateway \
-            --set-file "config.inline=$work/config.yaml" \
-            --post-renderer scripts/post-render.py > "$work/rendered.yaml"
-
-          # Assert the rendered output is valid YAML and non-empty.
-          python3 - "$work/rendered.yaml" <<'PY'
-          import sys, yaml
-          docs = list(yaml.safe_load_all(open(sys.argv[1])))
-          assert docs, "rendered output is empty"
-          print(f"rendered.yaml: valid YAML, {len(docs)} resources")
-          PY
+        run: make render

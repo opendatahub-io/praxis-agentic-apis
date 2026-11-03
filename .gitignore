@@ -1,3 +1,6 @@
 .cache/
 __pycache__/
 *.pyc
+
+# Temporary root action.yml copy created by 'make lint' (actionlint workaround).
+.github/actions/
