@@ -85,8 +85,24 @@ jobs:
           # and ingress is restricted by NetworkPolicy to the praxis-gateway
           # pods (default peer: app.kubernetes.io/name=praxis-gateway in the
           # praxis-standalone namespace).
+          #
+          # Praxis mode makes the operator regenerate the runtime config; its
+          # default source is the distribution image's OCI labels, which
+          # registry.redhat.io only serves to authenticated clients (the
+          # operator fetches anonymously -> HTTP 401, CR phase Failed). Point
+          # spec.baseConfig at a ConfigMap holding the image's pre-substitution
+          # config (/opt/app-root/config.yaml, extracted from the running pod)
+          # instead — it takes precedence over OCI label resolution.
+          oc -n redhat-ods-applications exec deployment/ogx-distribution -- \
+            cat /opt/app-root/config.yaml > /tmp/ogx-base-config.yaml
+          oc -n redhat-ods-applications create configmap ogx-distribution-base-config \
+            --from-file=config.yaml=/tmp/ogx-base-config.yaml \
+            --dry-run=client -o yaml | oc apply -f -
+          oc -n redhat-ods-applications label configmap ogx-distribution-base-config \
+            ogx.io/watch=true --overwrite
+
           oc -n redhat-ods-applications patch ogxserver ogx-distribution --type merge \
-            -p '{"spec":{"praxisMode":{"enabled":true}}}'
+            -p '{"spec":{"baseConfig":{"name":"ogx-distribution-base-config","key":"config.yaml"},"praxisMode":{"enabled":true}}}'
 
           # Wait for the operator to reconcile the new mode and roll out.
           oc -n redhat-ods-applications wait --for=jsonpath='{.status.phase}'=Ready \
