@@ -52,7 +52,8 @@ lint-actionlint:
 	actionlint
 
 lint-ruff:
-	ruff check demos/shop-outage/sre-assistant demos/shop-outage/app/
+lint-ruff:
+	ruff check scripts/parse-manifest.py demos/shop-outage/sre-assistant demos/shop-outage/app/
 
 ## render: chart render dry-run mirroring scripts/deploy.sh's render path
 ## (envsubst -> helm template), no cluster writes. Helm 3 and Helm 4 render
