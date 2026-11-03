@@ -52,7 +52,7 @@ lint-actionlint:
 	actionlint
 
 lint-ruff:
-	ruff check demos/shop-outage/sre-assistant demos/shop-outage/app/
+	ruff check scripts/parse-manifest.py demos/shop-outage/sre-assistant demos/shop-outage/app/
 
 ## render: build dependencies and render the umbrella chart without cluster writes.
 render:
