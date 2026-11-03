@@ -1,0 +1,45 @@
+# Manifest of runnable tests and demos (ported from ogx-showroom's
+# demos/manifest.yaml + scripts/parse-manifest.py pattern). Entries run in
+# file order; the level→tags mapping lives in tests/e2e.sh.
+#
+# Each entry specifies:
+#   path:      Relative path from project root
+#   tags:      Tags for filtering (level selects a tag set)
+#   name:      Human-readable name
+#   type:      Execution type (shell)
+#   requires:  Optional cluster/deployment precondition; unmet -> SKIP
+#
+# Usage (see tests/e2e.sh):
+#   LEVEL=smoke      tests/e2e.sh   # free tier only
+#   LEVEL=functional tests/e2e.sh   # + paid inference
+#   LEVEL=mcp        tests/e2e.sh   # + MCP tool calls
+#   LEVEL=websearch  tests/e2e.sh   # + web search
+#   LEVEL=full       tests/e2e.sh   # everything
+#
+# Levels select tags cumulatively; the demo tier (T2.4) lands later.
+
+tests:
+  - path: tests/smoke.sh
+    tags: [smoke, free]
+    name: Smoke - conversations CRUD (no inference)
+    type: shell
+    description: Creates, updates, reads and deletes a conversation through the gateway
+
+  - path: tests/responses.sh
+    tags: [functional, paid]
+    name: Responses API - paid inference
+    type: shell
+    description: Two Responses requests (non-stream and stream) against the configured inference backend
+
+  - path: tests/mcp.sh
+    tags: [mcp, paid]
+    name: MCP tool calls - paid inference
+    type: shell
+    description: MCP discovery and echo tool execution via the mcp-test server (applied by e2e.sh)
+
+  - path: tests/web-search.sh
+    tags: [websearch, paid]
+    name: Web search - paid inference
+    type: shell
+    requires: web-search
+    description: Web-search tool invocation (needs the gateway deployed with ENABLE_WEB_SEARCH=true)

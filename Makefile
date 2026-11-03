@@ -52,7 +52,7 @@ lint-actionlint:
 	actionlint
 
 lint-ruff:
-	ruff check scripts/helm-plugins/praxis-post-render/post-render.py demos/shop-outage/sre-assistant demos/shop-outage/app/
+	ruff check scripts/helm-plugins/praxis-post-render/post-render.py scripts/parse-manifest.py demos/shop-outage/sre-assistant demos/shop-outage/app/
 
 ## render: chart render dry-run mirroring scripts/deploy.sh's render path
 ## (envsubst -> helm template -> post-renderer), no cluster writes. Like
