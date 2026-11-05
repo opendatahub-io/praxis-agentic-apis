@@ -46,31 +46,35 @@ lint-shellcheck:
 	rc=0; while IFS= read -r script; do echo "shellcheck: $$script"; shellcheck "$$script" || rc=1; done < <(find scripts tests demos .github/scripts -name '*.sh' -type f | sort); exit $$rc
 
 lint-yamllint:
-	yamllint --strict configs/ demos/shop-outage/manifests/ .github/workflows/ action.yml .yamllint.yaml
+	yamllint --strict configs/ demos/shop-outage/manifests/ .github/workflows/ .yamllint.yaml
 
 lint-actionlint:
 	actionlint
-	# actionlint auto-detects workflows and .github/actions/*/action.yml, but
-	# not a repo-root action.yml. Lint it via the detected location.
-	mkdir -p .github/actions/root
-	cp action.yml .github/actions/root/action.yml
-	actionlint
 
 lint-ruff:
-	ruff check scripts/post-render.py demos/shop-outage/sre-assistant demos/shop-outage/app/
+	ruff check scripts/helm-plugins/praxis-post-render/post-render.py demos/shop-outage/sre-assistant demos/shop-outage/app/
 
 ## render: chart render dry-run mirroring scripts/deploy.sh's render path
-## (envsubst -> helm template -> post-renderer), no cluster writes.
+## (envsubst -> helm template -> post-renderer), no cluster writes. Like
+## deploy.sh, supports both Helm major versions: v4 installs the bundled
+## postrenderer plugin, v3 uses the script path directly.
 render:
 	# PyYAML is needed by the post-renderer and the assertion below.
 	python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
 	work="$$(mktemp -d)"; \
 	envsubst '$${OGX_ENDPOINT} $${INFERENCE_HOST} $${INFERENCE_PORT} $${MCP_SERVER_URL}' \
 		< configs/openai-ogx/config.yaml > "$$work/config.yaml"; \
+	if helm version --short | grep -qE '^v?[4-9]'; then \
+		helm plugin list | awk '{print $$1}' | grep -qx praxis-post-render || \
+			helm plugin install scripts/helm-plugins/praxis-post-render; \
+		post_renderer=praxis-post-render; \
+	else \
+		post_renderer=scripts/helm-plugins/praxis-post-render/post-render.py; \
+	fi; \
 	helm template praxis-gateway \
 		oci://ghcr.io/praxis-proxy/charts/praxis-gateway --version 0.2.1 \
 		-f configs/common-values.yaml -f configs/openai-ogx/values.yaml \
 		--set-string fullnameOverride=praxis-gateway \
 		--set-file "config.inline=$$work/config.yaml" \
-		--post-renderer scripts/post-render.py > "$$work/rendered.yaml"; \
+		--post-renderer "$$post_renderer" > "$$work/rendered.yaml"; \
 	python3 -c 'import sys, yaml; docs = list(yaml.safe_load_all(open(sys.argv[1]))); assert docs, "rendered output is empty"; print(f"rendered.yaml: valid YAML, {len(docs)} resources")' "$$work/rendered.yaml"

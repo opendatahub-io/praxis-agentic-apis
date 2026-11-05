@@ -5,7 +5,7 @@
 # in mvp.yml / nightly, dispatch/nightly only).
 #
 # Jobs:
-#   lint   — shellcheck, yamllint, actionlint (workflows + composite action), ruff
+#   lint   — shellcheck, yamllint, actionlint (workflows), ruff
 #   render — chart render dry-run mirroring scripts/deploy.sh's render path
 #            (envsubst -> helm template -> post-renderer), no cluster writes.
 #
@@ -53,11 +53,13 @@ jobs:
         # actions/checkout v4.1.7
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
 
-      # Dogfoods the repo's own Setup CI Environment action in its secret-free
-      # mode: no oc_server/oc_token -> oc-login and the pre-flight cluster
-      # check are skipped; we only need the helm install it provides.
-      - name: Setup CI environment (secret-free dry run)
-        uses: ./
+      # The render job needs only Helm, so it installs it directly (pinned by
+      # full SHA) instead of pulling in any cluster tooling. Latest stable
+      # (v4) matches what the e2e pipeline resolves to; `make render` handles
+      # both v3 and v4 post-renderer modes like scripts/deploy.sh does.
+      - name: Install Helm
+        # azure/setup-helm v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4
 
       - name: Render chart (no cluster writes)
         run: make render
