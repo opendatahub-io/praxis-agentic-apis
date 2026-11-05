@@ -84,8 +84,8 @@ filter_chains:
 
       - filter: openai_tool_parse
 
-      # deploy.sh renders the PostgreSQL URL and TLS mode, or rewrites both stores
-      # to SQLite when STORE_BACKEND=sqlite. The password comes from PGPASSWORD.
+      # deploy.sh renders the PostgreSQL URL and TLS mode. The password comes
+      # from PGPASSWORD.
       - filter: openai_conversations
         backend: postgres
         database_url: "${DATABASE_URL}"

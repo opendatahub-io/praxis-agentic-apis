@@ -17,7 +17,6 @@ Set these environment variables before running `scripts/deploy.sh`:
 | `INFERENCE_HOST` | `api.openai.com` | HTTPS backend hostname and TLS SNI |
 | `INFERENCE_PORT` | `443` | HTTPS backend port |
 | `MCP_SERVER_URL` | `http://mcp-test:3001/mcp` | MCP server for the `mcp-server` connector; set `http://openshift-mcp:8080/mcp` for the OpenShift MCP server |
-| `STORE_BACKEND` | `postgres` | Responses and Conversations store (`postgres` or `sqlite`) |
 | `DATABASE_HOST` | Empty (deploy in-repo PostgreSQL) | External PostgreSQL hostname; when empty, the installer deploys `infra/postgres` |
 | `DATABASE_PORT` | `5432` | PostgreSQL port |
 | `DATABASE_NAME` | `praxis` | PostgreSQL database; must be dedicated to Praxis |
@@ -77,8 +76,8 @@ deployment; other dollar signs are preserved.
 Keep credentials in Secrets, not config files.
 Alternate configs must retain the API listener on `0.0.0.0:8080`, admin listener on
 `127.0.0.1:9901`, and the `openai_conversations` and `openai_responses_store` filters
-to use the existing access, probes, tests, and storage setup unchanged; with
-`STORE_BACKEND=sqlite` the installer points both at SQLite under `/var/lib/praxis`. OGX remains a prerequisite for the installer.
+to use the existing access, probes, tests, and storage setup unchanged. OGX remains a
+prerequisite for the installer.
 
 ## Web search
 
@@ -110,18 +109,21 @@ The image digest takes precedence over the tag. To select another image, set its
 repository and digest in your values override file. Stable `ghcr.io/praxis-proxy/ai`
 images from 0.8.0 exclude the experimental Responses and agentic loop filters this config
 uses; use a `-experimental` tag or build with
-`--build-arg PRAXIS_AI_FEATURES=full,openai-all,store-sqlite,store-postgres`.
+`--build-arg PRAXIS_AI_FEATURES=full,openai-all,store-postgres`.
+
+The installer passes the pipeline as standard Helm values and does not use a
+post-renderer, so Helm 3 and Helm 4 are both supported.
 
 ## Storage and upgrades
 
-Responses and Conversations are stored in PostgreSQL by default, so they survive
+Responses and Conversations are stored in PostgreSQL, so they survive
 pod restarts, upgrades, and uninstalls. Praxis creates and validates its tables at
 startup; the database must be empty or already hold the current Praxis schema.
 Schema upgrades are recreate-only: when a Praxis release changes the schema, back
 up and recreate the database (see the Praxis AI
 [schema upgrade guide](https://github.com/praxis-proxy/ai/blob/main/docs/store/schema-migration.md)).
 
-A custom image must include the `store-postgres` feature, or use `STORE_BACKEND=sqlite`.
+A custom image must include the `store-postgres` feature.
 
 ### In-repo PostgreSQL
 
@@ -165,21 +167,8 @@ plus a values override mounting the files. The default pipeline sets
 `allow_private_database_url: true` so cluster DNS names and private addresses
 are accepted. The installer does not add egress policies.
 
-### SQLite
-
-`STORE_BACKEND=sqlite` restores the previous behavior: both stores use SQLite in an
-`emptyDir` at `/var/lib/praxis`. State survives container restarts within the
-same pod, but **is lost when the pod is replaced**, including upgrades that
-trigger a rollout. No PostgreSQL resources are deployed.
-
-`/tmp` and the root filesystem remain read-only. `scripts/post-render.py` adds the
-`/var/lib/praxis` mount without changing the published chart; run
-`scripts/deploy.sh` for every upgrade to retain it and the store settings.
-
 Changing a Secret requires a pod restart to load the new value:
 
 ```bash
 oc -n "$NAMESPACE" rollout restart "deployment/$RELEASE"
 ```
-
-With SQLite, this also discards stored state.

@@ -5,7 +5,7 @@ using standalone Praxis. Inference uses an OpenAI-compatible HTTPS Chat
 Completions backend. Files, Vector Stores, and hosted file search
 require an existing OGX deployment.
 Optional hosted web search uses Brave Search. Responses and Conversations
-are stored in PostgreSQL, deployed alongside Praxis by default.
+are stored in PostgreSQL, deployed alongside Praxis.
 
 This is an **unauthenticated, single-user preview, not for production**. All
 requests share the fixed owner `praxis-standalone`. The API is accessible from
@@ -72,8 +72,7 @@ share the same Praxis identity and data.
 
 See [configuration](docs/configuration.md) for deployment settings, selecting
 multiple configs, the pinned chart/image, and storage/upgrade behavior,
-including using an external PostgreSQL (`DATABASE_HOST`) or SQLite
-(`STORE_BACKEND=sqlite`).
+including using an external PostgreSQL (`DATABASE_HOST`).
 
 The default config is `configs/openai-ogx/`, with shared Helm defaults in
 `configs/common-values.yaml`. Select another directory with `CONFIG_DIR`:
@@ -215,8 +214,6 @@ the Conversation, its items, and the stored Response are unchanged:
 ```bash
 MODEL=gpt-6-luna bash ./tests/persistence.sh
 ```
-
-It fails with `STORE_BACKEND=sqlite`, which loses state when the pod is replaced.
 
 Tests delete resources they create and stop port-forwarding on exit, including
 on failure. Check cleanup errors for resources needing manual deletion. Request

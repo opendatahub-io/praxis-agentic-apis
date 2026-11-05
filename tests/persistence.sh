@@ -48,7 +48,7 @@ retained() {
   shift
   if ! api "$path" >"$WORK/after.json" 2>/dev/null; then
     echo "State lost after restart: GET $path returned: $(jq -r '.error.message // "error"' "$WORK/after.json" 2>/dev/null)" >&2
-    echo 'Stored state must not be on pod-local storage (STORE_BACKEND=sqlite loses it on restart).' >&2
+    echo 'Stored state must not be on pod-local storage.' >&2
     exit 1
   fi
   if ! jq -e "$@" "$WORK/after.json" >/dev/null; then

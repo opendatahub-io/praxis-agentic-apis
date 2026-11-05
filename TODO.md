@@ -13,3 +13,4 @@
 - [ ] Integrate with the RHOAI MCP catalogue.
 - [ ] Conversation context compaction.
 - [ ] CI for demo validation and tests.
+- [ ] Make the setup installable with plain Helm, without the `deploy.sh` wrapper.
