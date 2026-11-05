@@ -69,8 +69,15 @@ jobs:
           "$scripts_dir/setup.sh"
           "$scripts_dir/provision.sh"
 
-          # Verify OGX is functional before switching to praxis mode
-          "$scripts_dir/test.sh" hello
+          # Verify OGX is functional before switching to praxis mode.
+          # Run from the showroom scripts dir: test.sh launches jupyter demos
+          # via `uv run jupyter ...`, and `uv` resolves the project (and its
+          # jupyter dependency) from the current working directory — running
+          # from this repo's checkout (no pyproject.toml) fails with
+          # "Failed to spawn: jupyter".
+          pushd "$scripts_dir"
+          ./test.sh hello
+          popd
 
           # Remove the external Route: OGX is internal-only from here on
           # (praxis-gateway fronts it).
