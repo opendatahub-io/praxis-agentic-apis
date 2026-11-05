@@ -11,14 +11,14 @@
 #   praxis:        NAMESPACE and the praxis-gateway Helm release inside it
 #
 # Usage (env-driven):
-#   NAMESPACE=praxis-ci RELEASE=praxis-gateway MAX_WAIT=300 INTERVAL=30 \
+#   NAMESPACE=praxis-standalone RELEASE=praxis-gateway MAX_WAIT=300 INTERVAL=30 \
 #     .github/scripts/preflight-cluster-clean.sh
 #
 # Exits 0 as soon as the cluster is clean, 1 on timeout.
 
 set -euo pipefail
 
-NAMESPACE="${NAMESPACE:-praxis-ci}"
+NAMESPACE="${NAMESPACE:-praxis-standalone}"
 RELEASE="${RELEASE:-praxis-gateway}"
 MAX_WAIT="${MAX_WAIT:-300}"
 INTERVAL="${INTERVAL:-30}"

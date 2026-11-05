@@ -17,7 +17,10 @@
 # Cross-repo serialization: the `concurrency` group only serializes runs
 # within THIS repo. The cross-repo mutex against ogx-showroom's own CI is
 # showroom's pre-flight clean-cluster wait, which runs inside the composite
-# action below.
+# action below, plus this repo's own pre-flight wait
+# (.github/scripts/preflight-cluster-clean.sh), which also guards against
+# leftovers from crashed praxis runs (e.g. an orphaned praxis-standalone
+# namespace).
 
 name: MVP E2E
 
@@ -62,6 +65,13 @@ jobs:
             SHOWROOM_VLLM_EMBEDDING_API_TOKEN=${{ secrets.LITEMAAS_API_KEY }}
             SHOWROOM_EMBEDDING_MODEL=${{ vars.LITEMAAS_EMBEDDING_MODEL }}
             SHOWROOM_EMBEDDING_PROVIDER_MODEL_ID=${{ vars.LITEMAAS_EMBEDDING_MODEL }}
+
+      - name: Pre-flight clean-cluster wait (cross-repo mutex, praxis side)
+        # Same gate as showroom's, but also waits for praxis leftovers
+        # (NAMESPACE + praxis-gateway Helm release) from crashed runs.
+        env:
+          NAMESPACE: praxis-standalone
+        run: bash .github/scripts/preflight-cluster-clean.sh
 
       - name: Provision OGX (ogx-showroom)
         run: |

@@ -25,21 +25,6 @@ the shop-outage demo, and always tear everything down again.
 - All workflows use `permissions: {}` by default, pin every action by full
   commit SHA, and set `timeout-minutes`.
 
-## Setup action (`action.yml`)
-
-The repo-root composite action **Setup CI Environment** centralizes the common
-job preamble:
-
-1. installs `oc` / `uv` / `helm` (nested actions pinned by full SHA),
-2. logs in to the cluster via `oc-login` (**skipped when `oc_server`/`oc_token`
-   are empty**, enabling secret-free dry runs),
-3. exports `KEY=value` lines from the `env:` input to `GITHUB_ENV`
-   (key names are validated; the values are masked if they come from secrets),
-4. runs the **pre-flight clean-cluster wait** (skipped without credentials).
-
-Inputs: `oc_server`, `oc_token`, `env` (multiline `KEY=value`), `namespace`
-(default `praxis-ci`). Output: `namespace`.
-
 ## Shared-cluster serialization
 
 CI shares the ROSA cluster with ogx-showroom's own CI. Two locks apply:
@@ -52,10 +37,15 @@ CI shares the ROSA cluster with ogx-showroom's own CI. Two locks apply:
    ([`.github/scripts/preflight-cluster-clean.sh`](../.github/scripts/preflight-cluster-clean.sh))
    polls until the cluster carries no leftovers from a previous run of either
    repo: showroom's `rhoai-catalog` CatalogSource + `redhat-ods-operator`
-   namespace, and praxis's own namespace + `praxis-gateway` Helm release. It
-   waits up to 5 minutes, then fails the job. Every job that touches the
-   cluster must run it before provisioning (the setup action does), and must
+   namespace, and praxis's own namespace (default `praxis-standalone`) +
+   `praxis-gateway` Helm release. It waits up to 5 minutes, then fails the
+   job. `mvp.yml` runs it after the showroom setup step, before provisioning;
+   every future job that touches the cluster must do the same, and must
    clean up in `if: always()` steps so the next job finds a clean cluster.
+
+Tooling: cluster jobs get `oc`/`uv`/`helm` and `oc-login` from the
+ogx-showroom composite action; secret-free jobs (e.g. the planned `static.yml`
+helm render check) install only what they need (e.g. `azure/setup-helm`).
 
 ## OGX-via-showroom composition
 
