@@ -105,8 +105,9 @@ uses; build with `--build-arg PRAXIS_AI_FEATURES=full,openai-all,store-sqlite` i
 SQLite uses an `emptyDir` at `/var/lib/praxis`. State survives container restarts
 within the same pod, but **is lost when the pod is replaced**, including upgrades
 that trigger a rollout. `/tmp` and the root filesystem remain read-only.
-`scripts/post-render.py` adds the mount without changing the published chart;
-run `scripts/deploy.sh` for every upgrade to retain it.
+`scripts/helm-plugins/praxis-post-render/post-render.py` adds the mount
+without changing the published chart; run `scripts/deploy.sh` for every
+upgrade to retain it.
 
 Changing the backend Secret requires a pod restart to load the new value:
 

@@ -139,6 +139,20 @@ spec:
           port: ${OGX_PORT}
 YAML
 
+# Helm 4 requires post-renderers to be typed plugins (postrenderer/v1) and
+# rejects an executable path ("plugin ... not found"); Helm 3 only accepts an
+# executable path. Support both: install the bundled plugin for Helm 4, fall
+# back to the script path for Helm 3.
+POST_RENDER_PLUGIN=praxis-post-render
+POST_RENDER_SCRIPT="$ROOT/scripts/helm-plugins/$POST_RENDER_PLUGIN/post-render.py"
+if helm version --short | grep -qE '^v?[4-9]'; then
+  helm plugin list | awk '{print $1}' | grep -qx "$POST_RENDER_PLUGIN" ||
+    helm plugin install "${POST_RENDER_SCRIPT%/*}"
+  POST_RENDERER_ARGS=(--post-renderer "$POST_RENDER_PLUGIN")
+else
+  POST_RENDERER_ARGS=(--post-renderer "$POST_RENDER_SCRIPT")
+fi
+
 helm upgrade --install "$RELEASE" \
   oci://ghcr.io/praxis-proxy/charts/praxis-gateway --version 0.2.1 \
   --namespace "$NAMESPACE" \
@@ -148,4 +162,4 @@ helm upgrade --install "$RELEASE" \
   --set-string "env[0].valueFrom.secretKeyRef.key=$API_KEY_SECRET_KEY" \
   "${SEARCH_ARGS[@]}" "${IMAGE_ARGS[@]}" \
   --set-file "config.inline=$WORK/config.yaml" \
-  --post-renderer "$ROOT/scripts/post-render.py" --wait --timeout 5m
+  "${POST_RENDERER_ARGS[@]}" --wait --timeout 5m
