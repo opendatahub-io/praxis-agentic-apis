@@ -129,9 +129,10 @@ A custom image must include the `store-postgres` feature.
 
 With `DATABASE_HOST` unset, the installer deploys `infra/postgres/postgres.yaml` in
 `$NAMESPACE` before Praxis: a single-replica PostgreSQL 16 Deployment, a 1 GiB
-PersistentVolumeClaim, a Service, and a NetworkPolicy admitting only this release's
-Praxis pods on port 5432. On first deploy it creates the Secret `${RELEASE}-postgres`
-with keys `POSTGRESQL_USER`, `POSTGRESQL_DATABASE` (from `DATABASE_USER` and
+PersistentVolumeClaim, a Service on `DATABASE_PORT` (default 5432), and a
+NetworkPolicy admitting only this release's Praxis pods on port 5432. On first
+deploy it creates the Secret `${RELEASE}-postgres` with keys
+`POSTGRESQL_USER`, `POSTGRESQL_DATABASE` (from `DATABASE_USER` and
 `DATABASE_NAME`), and a random `POSTGRESQL_PASSWORD`. An existing Secret is reused
 unchanged. Traffic stays in the namespace and is not encrypted (`DATABASE_SSL_MODE=disable`).
 

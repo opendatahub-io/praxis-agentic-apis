@@ -1,6 +1,7 @@
 # Single-replica PostgreSQL for Praxis Responses and Conversations state.
-# scripts/deploy.sh substitutes ${RELEASE}, creates the ${RELEASE}-postgres
-# Secret (POSTGRESQL_USER, POSTGRESQL_PASSWORD, POSTGRESQL_DATABASE) if it is
+# scripts/deploy.sh substitutes ${RELEASE} and ${DATABASE_PORT}, creates the
+# ${RELEASE}-postgres Secret (POSTGRESQL_USER, POSTGRESQL_PASSWORD,
+# POSTGRESQL_DATABASE) if it is
 # missing, and applies this file in $NAMESPACE unless DATABASE_HOST is set.
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -90,7 +91,7 @@ spec:
     app.kubernetes.io/instance: "${RELEASE}"
   ports:
     - name: postgresql
-      port: 5432
+      port: ${DATABASE_PORT}
       targetPort: postgresql
 ---
 apiVersion: networking.k8s.io/v1
