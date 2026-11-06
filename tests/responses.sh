@@ -85,7 +85,7 @@ RESOURCES+=("/v1/conversations/$CONVERSATION")
 post "/v1/conversations/$CONVERSATION" '{"metadata":{"test":"updated"}}' >/dev/null
 api "/v1/conversations/$CONVERSATION" | jq -e '.metadata.test == "updated"' >/dev/null
 
-echo 'Buffered Responses, conversation items and SQLite retrieval'
+echo 'Buffered Responses, conversation items and store retrieval'
 CODE="remember-$RANDOM-$RANDOM"
 respond "$(jq -nc --arg conversation "$CONVERSATION" --arg input "Remember this code: $CODE. Reply only OK." '
   {conversation:$conversation,input:$input}')"

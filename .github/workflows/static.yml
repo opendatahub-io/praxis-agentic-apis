@@ -7,7 +7,7 @@
 # Jobs:
 #   lint   — shellcheck, yamllint, actionlint (workflows), ruff
 #   render — chart render dry-run mirroring scripts/deploy.sh's render path
-#            (envsubst -> helm template -> post-renderer), no cluster writes.
+#            (envsubst -> helm template), no cluster writes.
 #
 # Both jobs call the Makefile targets (`make tools`, `make lint`, `make
 # render`) so developers can run the exact same commands locally.
@@ -55,8 +55,8 @@ jobs:
 
       # The render job needs only Helm, so it installs it directly (pinned by
       # full SHA) instead of pulling in any cluster tooling. Latest stable
-      # (v4) matches what the e2e pipeline resolves to; `make render` handles
-      # both v3 and v4 post-renderer modes like scripts/deploy.sh does.
+      # (v4) matches what the e2e pipeline resolves to; Helm 3 and Helm 4
+      # render the same way, with no post-renderer.
       - name: Install Helm
         # azure/setup-helm v4
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4

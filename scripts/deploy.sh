@@ -20,6 +20,17 @@ export OGX_ENDPOINT=${OGX_ENDPOINT:-$OGX_SERVICE.$OGX_NAMESPACE.svc.cluster.loca
 export INFERENCE_HOST=${INFERENCE_HOST:-api.openai.com}
 export INFERENCE_PORT=${INFERENCE_PORT:-443}
 export MCP_SERVER_URL=${MCP_SERVER_URL:-http://mcp-test:3001/mcp}
+DATABASE_HOST=${DATABASE_HOST:-}
+DATABASE_PORT=${DATABASE_PORT:-5432}
+DATABASE_NAME=${DATABASE_NAME:-praxis}
+DATABASE_USER=${DATABASE_USER:-praxis}
+DATABASE_SECRET=${DATABASE_SECRET:-$RELEASE-postgres}
+DATABASE_SECRET_KEY=${DATABASE_SECRET_KEY:-POSTGRESQL_PASSWORD}
+if [[ -z $DATABASE_HOST ]]; then
+  export DATABASE_SSL_MODE=${DATABASE_SSL_MODE:-disable}
+else
+  export DATABASE_SSL_MODE=${DATABASE_SSL_MODE:-verify-full}
+fi
 
 # Optional image override (envs append Helm --set-string; unset = common-values.yaml pin).
 # A tag alone must also clear the pinned digest, otherwise the digest (which takes
@@ -55,37 +66,13 @@ python3 -c 'import yaml'
   echo 'ENABLE_WEB_SEARCH must be true or false' >&2
   exit 1
 }
+[[ $DATABASE_SSL_MODE =~ ^(disable|prefer|require|verify-ca|verify-full)$ ]] || {
+  echo 'DATABASE_SSL_MODE must be disable, prefer, require, verify-ca, or verify-full' >&2
+  exit 1
+}
 [[ -r "$CONFIG_FILE" && -r "$CONFIG_DIR/values.yaml" && -r "$VALUES_FILE" ]]
 WORK=$(mktemp -d)
 trap 'rm -f "$WORK/config.yaml"; rmdir "$WORK"' EXIT
-envsubst "\${OGX_ENDPOINT} \${INFERENCE_HOST} \${INFERENCE_PORT} \${MCP_SERVER_URL}" <"$CONFIG_FILE" >"$WORK/config.yaml"
-SEARCH_ARGS=()
-if [[ $ENABLE_WEB_SEARCH == true ]]; then
-  SEARCH_ARGS=(
-    --set-string 'env[1].name=WEB_SEARCH_API_KEY'
-    --set-string "env[1].valueFrom.secretKeyRef.name=$WEB_SEARCH_API_KEY_SECRET"
-    --set-string "env[1].valueFrom.secretKeyRef.key=$WEB_SEARCH_API_KEY_SECRET_KEY"
-  )
-else
-  python3 - "$WORK/config.yaml" <<'PY'
-import sys
-
-import yaml
-
-def without_web_search(value):
-    if isinstance(value, list):
-        return [without_web_search(item) for item in value
-                if not (isinstance(item, dict) and item.get("filter") == "openai_web_search_dispatch")]
-    if isinstance(value, dict):
-        return {key: without_web_search(item) for key, item in value.items()}
-    return value
-
-with open(sys.argv[1]) as source:
-    config = without_web_search(yaml.safe_load(source))
-with open(sys.argv[1], "w") as target:
-    yaml.safe_dump(config, target, sort_keys=False)
-PY
-fi
 
 oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
 if [[ $ENABLE_WEB_SEARCH == true &&
@@ -94,6 +81,78 @@ if [[ $ENABLE_WEB_SEARCH == true &&
   echo "Secret $WEB_SEARCH_API_KEY_SECRET with nonempty key $WEB_SEARCH_API_KEY_SECRET_KEY is required in $NAMESPACE" >&2
   exit 1
 fi
+
+secret_value() {
+  oc -n "$NAMESPACE" get secret "$1" --ignore-not-found -o jsonpath="{.data.${2//./\\.}}" | base64 -d
+}
+
+ENV_ARGS=()
+ENV_INDEX=1
+if [[ $ENABLE_WEB_SEARCH == true ]]; then
+  ENV_ARGS+=(
+    --set-string "env[$ENV_INDEX].name=WEB_SEARCH_API_KEY"
+    --set-string "env[$ENV_INDEX].valueFrom.secretKeyRef.name=$WEB_SEARCH_API_KEY_SECRET"
+    --set-string "env[$ENV_INDEX].valueFrom.secretKeyRef.key=$WEB_SEARCH_API_KEY_SECRET_KEY"
+  )
+  ENV_INDEX=$((ENV_INDEX + 1))
+fi
+
+export DATABASE_URL=
+if [[ -z $DATABASE_HOST ]]; then
+  # In-repo PostgreSQL: keep an existing Secret, since the data directory was
+  # initialized with its credentials.
+  DATABASE_SECRET=$RELEASE-postgres
+  DATABASE_SECRET_KEY=POSTGRESQL_PASSWORD
+  if [[ -z $(secret_value "$DATABASE_SECRET" POSTGRESQL_PASSWORD) ]]; then
+    oc -n "$NAMESPACE" create secret generic "$DATABASE_SECRET" \
+      --from-literal=POSTGRESQL_USER="$DATABASE_USER" \
+      --from-literal=POSTGRESQL_DATABASE="$DATABASE_NAME" \
+      --from-file=POSTGRESQL_PASSWORD=<(python3 -c 'import secrets; print(secrets.token_hex(24), end="")')
+  fi
+  DATABASE_USER=$(secret_value "$DATABASE_SECRET" POSTGRESQL_USER)
+  DATABASE_NAME=$(secret_value "$DATABASE_SECRET" POSTGRESQL_DATABASE)
+  DATABASE_HOST=$RELEASE-postgres.$NAMESPACE.svc.cluster.local
+  RELEASE=$RELEASE DATABASE_PORT=$DATABASE_PORT \
+    envsubst "\${RELEASE} \${DATABASE_PORT}" <"$ROOT/infra/postgres/postgres.yaml" |
+    oc -n "$NAMESPACE" apply -f -
+  oc -n "$NAMESPACE" rollout status "deployment/$RELEASE-postgres" --timeout=5m
+elif [[ -z $(secret_value "$DATABASE_SECRET" "$DATABASE_SECRET_KEY") ]]; then
+  echo "Secret $DATABASE_SECRET with nonempty key $DATABASE_SECRET_KEY is required in $NAMESPACE" >&2
+  exit 1
+fi
+DATABASE_URL=$(python3 -c 'import sys, urllib.parse as u
+user, host, port, name = sys.argv[1:]
+print(f"postgres://{u.quote(user, safe=str())}@{host}:{port}/{u.quote(name, safe=str())}")' \
+  "$DATABASE_USER" "$DATABASE_HOST" "$DATABASE_PORT" "$DATABASE_NAME")
+ENV_ARGS+=(
+  --set-string "env[$ENV_INDEX].name=PGPASSWORD"
+  --set-string "env[$ENV_INDEX].valueFrom.secretKeyRef.name=$DATABASE_SECRET"
+  --set-string "env[$ENV_INDEX].valueFrom.secretKeyRef.key=$DATABASE_SECRET_KEY"
+)
+
+envsubst "\${OGX_ENDPOINT} \${INFERENCE_HOST} \${INFERENCE_PORT} \${MCP_SERVER_URL} \${DATABASE_URL} \${DATABASE_SSL_MODE}" \
+  <"$CONFIG_FILE" >"$WORK/config.yaml"
+python3 - "$WORK/config.yaml" "$ENABLE_WEB_SEARCH" <<'PY'
+import sys
+
+import yaml
+
+path, web_search = sys.argv[1:]
+
+def render(value):
+    if isinstance(value, list):
+        return [render(item) for item in value
+                if not (web_search == "false" and isinstance(item, dict)
+                        and item.get("filter") == "openai_web_search_dispatch")]
+    if isinstance(value, dict):
+        return {key: render(item) for key, item in value.items()}
+    return value
+
+with open(path) as source:
+    config = render(yaml.safe_load(source))
+with open(path, "w") as target:
+    yaml.safe_dump(config, target, sort_keys=False)
+PY
 
 oc apply -f - <<YAML
 apiVersion: networking.k8s.io/v1
@@ -139,20 +198,6 @@ spec:
           port: ${OGX_PORT}
 YAML
 
-# Helm 4 requires post-renderers to be typed plugins (postrenderer/v1) and
-# rejects an executable path ("plugin ... not found"); Helm 3 only accepts an
-# executable path. Support both: install the bundled plugin for Helm 4, fall
-# back to the script path for Helm 3.
-POST_RENDER_PLUGIN=praxis-post-render
-POST_RENDER_SCRIPT="$ROOT/scripts/helm-plugins/$POST_RENDER_PLUGIN/post-render.py"
-if helm version --short | grep -qE '^v?[4-9]'; then
-  helm plugin list | awk '{print $1}' | grep -qx "$POST_RENDER_PLUGIN" ||
-    helm plugin install "${POST_RENDER_SCRIPT%/*}"
-  POST_RENDERER_ARGS=(--post-renderer "$POST_RENDER_PLUGIN")
-else
-  POST_RENDERER_ARGS=(--post-renderer "$POST_RENDER_SCRIPT")
-fi
-
 helm upgrade --install "$RELEASE" \
   oci://ghcr.io/praxis-proxy/charts/praxis-gateway --version 0.2.1 \
   --namespace "$NAMESPACE" \
@@ -160,6 +205,6 @@ helm upgrade --install "$RELEASE" \
   --set-string "fullnameOverride=$RELEASE" \
   --set-string "env[0].valueFrom.secretKeyRef.name=$API_KEY_SECRET" \
   --set-string "env[0].valueFrom.secretKeyRef.key=$API_KEY_SECRET_KEY" \
-  "${SEARCH_ARGS[@]}" "${IMAGE_ARGS[@]}" \
+  "${ENV_ARGS[@]}" "${IMAGE_ARGS[@]}" \
   --set-file "config.inline=$WORK/config.yaml" \
-  "${POST_RENDERER_ARGS[@]}" --wait --timeout 5m
+  --wait --timeout 5m

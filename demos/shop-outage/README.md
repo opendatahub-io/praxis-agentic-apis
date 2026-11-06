@@ -58,7 +58,7 @@ Every client request passes through the Praxis filter chains:
 - **ingress**: strips client auth headers, sets the fixed owner
   `praxis-standalone`, and routes `/v1/responses` to the Responses chains.
 - **responses**: parses the request and tools, loads the history for
-  `previous_response_id` from SQLite, and lists the MCP server's tools as
+  `previous_response_id` from PostgreSQL, and lists the MCP server's tools as
   `openshift__*` function tools.
 - **execution**: runs the agentic loop. Each round sends a Chat Completions
   request to OpenAI. Praxis runs the requested tools (MCP `tools/call`, OGX

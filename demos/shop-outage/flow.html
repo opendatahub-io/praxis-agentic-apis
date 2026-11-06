@@ -78,7 +78,7 @@ const nodes = {
   f_ingress: filter(164, 'headers · state_owner', 'strip auth headers · owner praxis-standalone · x-tenant-id / x-user-id', REQ),
   f_router:  filter(204, 'ai_operation · router', '/v1/responses → managed-chat · /v1/files, /v1/vector_stores → OGX', REQ),
   f_req:     filter(272, 'openai_responses_request · openai_tool_parse', 'validate body · parse mcp, file_search, web_search', TOOL),
-  f_store:   filter(312, 'openai_conversations · openai_responses_store', 'persist responses and items to SQLite', TOOL),
+  f_store:   filter(312, 'openai_conversations · openai_responses_store', 'persist responses and items to PostgreSQL', TOOL),
   f_rehyd:   filter(352, 'openai_responses_rehydrate', 'load history for previous_response_id', TOOL),
   f_resolve: filter(392, 'openai_mcp_tool_resolve', 'connector mcp-server → openshift__* function tools', TOOL),
   f_irr:     filter(462, 'iterative_request_router', 'step "inference" · max_iterations 8 · 360s', RES),
@@ -90,7 +90,7 @@ const nodes = {
   f_up:      filter(702, 'headers · load_balancer · credential_injection', 'Host + TLS SNI api.openai.com · Bearer OPENAI_API_KEY', REQ),
   f_r2c:     filter(742, 'openai_responses_to_chat_completions · path_rewrite', 'Responses ⇄ Chat Completions', REQ),
 
-  sqlite:   { x: 710, y: 300, w: 160, h: 100, label: 'SQLite', sublabel: 'responses.db', color: '#79c0ff', fontSize: 15 },
+  postgres: { x: 710, y: 300, w: 160, h: 100, label: 'PostgreSQL', sublabel: 'praxis-postgres:5432', color: '#79c0ff', fontSize: 15 },
   mcp:      { x: 710, y: 568, w: 180, h: 56, label: 'openshift-mcp', sublabel: ':8080/mcp · SA mcp-viewer', color: TOOL, fontSize: 14 },
 
   ns_ogx:   { x: 920, y: 90, w: 380, h: 120, label: 'namespace redhat-ods-applications', type: 'container', color: '#79c0ff' },
@@ -114,8 +114,8 @@ const tooltips = {
     details: [['Request', 'GET /res/v1/web/search?q=...'], ['Auth', 'X-Subscription-Token (WEB_SEARCH_API_KEY)']] },
   openai: { title: 'OpenAI', description: 'Chat Completions backend. Every agentic round is one streamed POST /v1/chat/completions with MCP, file_search, and web_search presented as function tools.',
     details: [['Endpoint', 'api.openai.com:443 (TLS SNI)'], ['Path', '/v1/chat/completions'], ['Model', 'gpt-6-luna'], ['Auth', 'Bearer OPENAI_API_KEY (injected by Praxis)']] },
-  sqlite: { title: 'SQLite responses store', description: 'Local database in the praxis-gateway pod. Stores responses, conversation items, and pending MCP approval records (requires store=true).',
-    details: [['URL', 'sqlite:///var/lib/praxis/responses.db'], ['Tables', 'openai_responses, openai_conversations, openai_conversation_items']] },
+  postgres: { title: 'PostgreSQL responses store', description: 'In-namespace PostgreSQL database. Stores responses, conversation items, and pending MCP approval records (requires store=true).',
+    details: [['URL', 'postgres://praxis@praxis-postgres:5432/praxis'], ['Tables', 'openai_responses, openai_conversations, openai_conversation_items']] },
   mcp: { title: 'OpenShift MCP server', description: 'Streamable-HTTP MCP server running as SA mcp-viewer. Its built-in denied_resources default blocks Secret, ServiceAccount, and RBAC objects before any API call.',
     details: [['URL', 'http://openshift-mcp:8080/mcp'], ['Mode', 'read_only false · disable_destructive false'], ['Tools', '10 read tools + pods_delete'], ['Denied', 'Secret, ServiceAccount, rbac.authorization.k8s.io'], ['Ingress', 'praxis-gateway pods only']] },
   ogx: { title: 'OGX', description: 'Hosts Files and Vector Stores. setup.sh uploads 11 runbooks and incident reports into one vector store; file_search queries it.',
@@ -136,7 +136,7 @@ const tooltips = {
   f_req: { title: 'openai_responses_request · openai_tool_parse', description: 'Validates the Responses body (on_invalid: reject) and parses the hosted tools.',
     details: [['Tools', 'mcp, file_search, web_search']] },
   f_store: { title: 'Conversations and responses store', description: 'Runs before the router so the response path persists the composed SSE. Stores each response id and its items, plus pending approval records.',
-    details: [['Backend', 'sqlite'], ['Database', '/var/lib/praxis/responses.db']] },
+    details: [['Backend', 'postgres'], ['Database', 'praxis-postgres:5432/praxis']] },
   f_rehyd: { title: 'openai_responses_rehydrate', description: 'Loads the stored input and output items for previous_response_id and prepends them to the new input.' },
   f_resolve: { title: 'openai_mcp_tool_resolve', description: 'Opens an MCP session (initialize, tools/list) on every request; listings are not cached. Converts allowed tools to function tools named openshift__<tool> and emits mcp_list_tools.',
     details: [['Connector', 'mcp-server → http://openshift-mcp:8080/mcp'], ['max_tools', '256']] },
@@ -314,7 +314,7 @@ const FILES = {
   inc4933: ['INC-4933.md', 'file-645f9509410042e5936a12bc47f13bcc'],
 };
 const storeLines = (id, extra = []) => [
-  ['sqlite:///var/lib/praxis/responses.db'],
+  ['postgres://praxis@praxis-postgres:5432/praxis'],
   ['+openai_responses: ' + id + ' (store=true)', '+  input items + output items + composed SSE', ...extra],
 ];
 const completedSSE = (id, text) => [
@@ -342,10 +342,10 @@ const requestPhase = (turn, input, prev, rehydrate) => [
     I('openai_responses_request · openai_tool_parse', 'request', null,
       ['parsed tools:', '+  mcp        server_label=openshift connector_id=mcp-server', '+  file_search vector_store_ids=[' + VS + ']', '+  web_search', 'store=true · stream=true · previous_response_id=' + prev])),
   ...(rehydrate ? [
-    A('f_rehyd', 'sqlite', REQ, E.rehyd, `Rehydrate: load history for ${prev}`,
-      I('openai_responses_rehydrate', 'request', ['sqlite:///var/lib/praxis/responses.db'],
+    A('f_rehyd', 'postgres', REQ, E.rehyd, `Rehydrate: load history for ${prev}`,
+      I('openai_responses_rehydrate', 'request', ['postgres://praxis@praxis-postgres:5432/praxis'],
         ['SELECT input + output items', '*  WHERE id = ' + prev + ' AND owner = praxis-standalone'])),
-    A('sqlite', 'f_rehyd', RES, E.rehyd_back, 'Prior turns prepended to the new input',
+    A('postgres', 'f_rehyd', RES, E.rehyd_back, 'Prior turns prepended to the new input',
       I('openai_responses_rehydrate', 'response', null, [...rehydrate, '+{"role": "user", "content": "' + input[0].replace(/^"input": "|",$/g, '') + '"}'])),
   ] : []),
   A('f_resolve', 'mcp', TOOL, E.res_mcp, 'MCP initialize + tools/list (every request, not cached)',
@@ -487,7 +487,7 @@ const turn1 = build([
       '...', 'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}', 'data: [DONE]'])),
   U('f_loop', 'Agentic loop: no tool calls → action = done',
     I('openai_agentic_loop', 'response', null, ['collected tool calls: none', '*action: done'])),
-  A('f_store', 'sqlite', RES, E.store, 'Persist resp_turn1 (store=true)',
+  A('f_store', 'postgres', RES, E.store, 'Persist resp_turn1 (store=true)',
     I('openai_responses_store', 'response', ...storeLines('resp_turn1'))),
   A('f_stream', 'client', RES, E.out_cli, 'SSE: output_text deltas, response.completed resp_turn1',
     I('openai_stream_events → sre-assistant', 'response', SSE_H, completedSSE('resp_turn1', '**No—browsing is working, but checkout is currently failing.** ...'))),
@@ -524,7 +524,7 @@ const turn2 = build([
     I('openai_mcp_dispatch: approval gate', 'response', null, ['require_approval.always: ["pods_delete"]', ...approvalReq('mcpr_1', POD_A)])),
   U('f_loop', 'Nothing dispatchable → action = done',
     I('openai_agentic_loop', 'response', null, ['pending: mcp_approval_request mcpr_1', '*action: done'])),
-  A('f_store', 'sqlite', RES, E.store, 'Persist resp_turn2a with the pending approval record',
+  A('f_store', 'postgres', RES, E.store, 'Persist resp_turn2a with the pending approval record',
     I('openai_responses_store', 'response', ...storeLines('resp_turn2a', ['+pending approval mcpr_1: pods_delete ' + POD_A]))),
   A('f_stream', 'client', APPR, E.out_cli, 'SSE: mcp_approval_request, response.completed resp_turn2a',
     I('openai_stream_events → sre-assistant', 'response', SSE_H, [
@@ -536,8 +536,8 @@ const turn2 = build([
     I('SRE answer', 'request', ['sre-assistant (stdin)'], ['+y'])),
   A('client', 'f_ingress', APPR, E.cli_in, 'POST /v1/responses: mcp_approval_response, previous_response_id resp_turn2a',
     I('sre-assistant → Praxis', 'request', CLIENT_H, approvalBody('mcpr_1', 'resp_turn2a'))),
-  A('f_mcp', 'sqlite', REQ, E.mcp_db, 'Iteration 0 (after ingress, rehydrate, tool resolve): load pending approval for resp_turn2a',
-    I('openai_mcp_dispatch: approval lookup', 'request', ['sqlite:///var/lib/praxis/responses.db'], [
+  A('f_mcp', 'postgres', REQ, E.mcp_db, 'Iteration 0 (after ingress, rehydrate, tool resolve): load pending approval for resp_turn2a',
+    I('openai_mcp_dispatch: approval lookup', 'request', ['postgres://praxis@praxis-postgres:5432/praxis'], [
       'lookup approval_request_id = mcpr_1', '*  scoped to previous_response_id = resp_turn2a', '+approved · marked used (single use)'])),
   A('f_mcp', 'mcp', TOOL, E.disp_mcp, 'MCP tools/call pods_delete ' + POD_A,
     I('openai_mcp_dispatch → openshift-mcp', 'request', MCP_H, [toolsCall('pods_delete', '{"name": "' + POD_A + '", "namespace": "shop"}')])),
@@ -588,7 +588,7 @@ const turn2 = build([
     I('OpenAI → Praxis (Chat SSE)', 'response', SSE_H, ['data: {"choices": [{"delta": {"content": "Restarted both `checkout-api` pods. **Checkout is responding again:** ..."}}]}', 'data: [DONE]'])),
   U('f_loop', 'No tool calls → action = done',
     I('openai_agentic_loop', 'response', null, ['*action: done'])),
-  A('f_store', 'sqlite', RES, E.store, 'Persist resp_turn2c',
+  A('f_store', 'postgres', RES, E.store, 'Persist resp_turn2c',
     I('openai_responses_store', 'response', ...storeLines('resp_turn2c'))),
   A('f_stream', 'client', RES, E.out_cli, 'SSE: text deltas, response.completed resp_turn2c',
     I('openai_stream_events → sre-assistant', 'response', SSE_H, completedSSE('resp_turn2c', 'Restarted both `checkout-api` pods. ...'))),
@@ -638,7 +638,7 @@ const turn3 = build([
     I('OpenAI → Praxis (Chat SSE)', 'response', SSE_H, ['data: {"choices": [{"delta": {"content": "# Incident report INC-4867: checkout errors after database credential rotation"}}]}', '...', 'data: [DONE]'])),
   U('f_loop', 'No tool calls → action = done',
     I('openai_agentic_loop', 'response', null, ['*action: done'])),
-  A('f_store', 'sqlite', RES, E.store, 'Persist resp_turn3',
+  A('f_store', 'postgres', RES, E.store, 'Persist resp_turn3',
     I('openai_responses_store', 'response', ...storeLines('resp_turn3'))),
   A('f_stream', 'client', RES, E.out_cli, 'SSE: report text, response.completed resp_turn3',
     I('openai_stream_events → sre-assistant', 'response', SSE_H, completedSSE('resp_turn3', '# Incident report INC-4867: ...'))),
