@@ -7,7 +7,7 @@ import signal
 import socket
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VERSION = os.environ.get("APP_VERSION", "dev")
@@ -19,7 +19,7 @@ DB_PASSWORD = os.environ["DATABASE_PASSWORD"]
 
 
 def log(level, message):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     print(f"{ts} {level:<5} {message}", flush=True)
 
 

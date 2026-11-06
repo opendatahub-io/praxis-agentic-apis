@@ -1,0 +1,65 @@
+# Static validation (no cluster, no secrets).
+#
+# Runs on every pull request and push to main. Safe for fork PRs: no secrets
+# are exposed to PR code (D7 trust boundary — secret-bearing cluster runs live
+# in mvp.yml / nightly, dispatch/nightly only).
+#
+# Jobs:
+#   lint   — shellcheck, yamllint, actionlint (workflows), ruff
+#   render — chart render dry-run mirroring scripts/deploy.sh's render path
+#            (envsubst -> helm template -> post-renderer), no cluster writes.
+#
+# Both jobs call the Makefile targets (`make tools`, `make lint`, `make
+# render`) so developers can run the exact same commands locally.
+
+name: Static validation
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        # actions/checkout v4.1.7
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+
+      - name: Install lint tools (make tools)
+        run: make tools
+
+      - name: Lint (make lint)
+        run: |
+          # make tools installs actionlint into ~/.local/bin.
+          PATH="$HOME/.local/bin:$PATH" make lint
+
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        # actions/checkout v4.1.7
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+
+      # The render job needs only Helm, so it installs it directly (pinned by
+      # full SHA) instead of pulling in any cluster tooling. Latest stable
+      # (v4) matches what the e2e pipeline resolves to; `make render` handles
+      # both v3 and v4 post-renderer modes like scripts/deploy.sh does.
+      - name: Install Helm
+        # azure/setup-helm v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4
+
+      - name: Render chart (no cluster writes)
+        run: make render

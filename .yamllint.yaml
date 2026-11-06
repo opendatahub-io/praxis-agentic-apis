@@ -1,0 +1,12 @@
+# yamllint configuration for this repository.
+#
+# Relaxed where the existing config files (Helm values, chart configs, demo
+# manifests) intentionally deviate from the default style: no leading "---",
+# long lines (URLs, image references), and workflow files where "on:" is a
+# key, not a boolean.
+extends: default
+
+rules:
+  document-start: disable
+  line-length: disable
+  truthy: disable
