@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # jq filters are intentionally single-quoted
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

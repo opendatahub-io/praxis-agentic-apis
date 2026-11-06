@@ -117,8 +117,8 @@ $ make render  # chart render dry-run (needs helm; no cluster writes)
 
 Tool versions are pinned in the `Makefile` (single source of truth — the
 workflow installs from there too). `make render` mirrors `scripts/deploy.sh`'s
-render path (envsubst → `helm template` → post-renderer) with cluster-neutral
-defaults and asserts the output is valid, non-empty YAML; override the
+render path (envsubst → `helm template`) with cluster-neutral defaults and
+asserts the output is valid, non-empty YAML; override the
 `OGX_ENDPOINT` / `INFERENCE_HOST` / `INFERENCE_PORT` / `MCP_SERVER_URL` make
 variables to render other backends.
 

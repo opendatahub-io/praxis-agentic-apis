@@ -113,7 +113,7 @@ if [[ -z $DATABASE_HOST ]]; then
   DATABASE_NAME=$(secret_value "$DATABASE_SECRET" POSTGRESQL_DATABASE)
   DATABASE_HOST=$RELEASE-postgres.$NAMESPACE.svc.cluster.local
   RELEASE=$RELEASE DATABASE_PORT=$DATABASE_PORT \
-    envsubst '${RELEASE} ${DATABASE_PORT}' <"$ROOT/infra/postgres/postgres.yaml" |
+    envsubst "\${RELEASE} \${DATABASE_PORT}" <"$ROOT/infra/postgres/postgres.yaml" |
     oc -n "$NAMESPACE" apply -f -
   oc -n "$NAMESPACE" rollout status "deployment/$RELEASE-postgres" --timeout=5m
 elif [[ -z $(secret_value "$DATABASE_SECRET" "$DATABASE_SECRET_KEY") ]]; then
