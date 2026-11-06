@@ -9,7 +9,8 @@
 # Levels (cumulative tag sets, manifest order = run order):
 #   smoke      free tier only (no inference calls)
 #   functional + Responses API (paid inference)
-#   mcp        + MCP tool calls (applies the mcp-test fixture)
+#   mcp        + MCP tool calls (fixture: OpenShift MCP server, or the
+#              everything test server as fallback)
 #   websearch  + web search (SKIP unless the gateway was deployed with
 #              ENABLE_WEB_SEARCH=true)
 #   full       everything
@@ -18,9 +19,11 @@
 #   NAMESPACE RELEASE MODEL EMBEDDING_MODEL VECTOR_STORE_PROVIDER
 #   OGX_ENDPOINT OGX_NAMESPACE OGX_SERVICE OGX_PORT MCP_SERVER_URL
 #   INFERENCE_HOST INFERENCE_PORT
+#   MCP                mcp tier fixture: auto (default) | openshift | everything
 #   DEPLOY=true        run scripts/deploy.sh first (the caller must still
 #                      pre-create the backend credential Secret; see
-#                      docs/configuration.md)
+#                      docs/configuration.md); with the mcp tier, the resolved
+#                      fixture's MCP_SERVER_URL is passed through
 #   SKIP_CLEANUP=true  leave the deployment in place after the run (dev
 #                      iteration; default is to always clean up)
 set -euo pipefail
@@ -31,6 +34,9 @@ NAMESPACE=${NAMESPACE:-praxis-standalone}
 RELEASE=${RELEASE:-praxis-gateway}
 DEPLOY=${DEPLOY:-false}
 SKIP_CLEANUP=${SKIP_CLEANUP:-false}
+# mcp tier fixture: auto (try OpenShift MCP, fall back to the everything test
+# server), openshift (require it) or everything (skip the OpenShift MCP).
+MCP=${MCP:-auto}
 
 case "$LEVEL" in
   smoke) TAGS=smoke ;;
@@ -46,6 +52,10 @@ esac
 case "$DEPLOY$SKIP_CLEANUP" in
   truetrue | truefalse | falsetrue | falsefalse) ;;
   *) echo 'DEPLOY and SKIP_CLEANUP must be true or false' >&2; exit 1 ;;
+esac
+case "$MCP" in
+  auto | openshift | everything) ;;
+  *) echo "MCP must be one of: auto openshift everything (got: $MCP)" >&2; exit 1 ;;
 esac
 
 for tool in oc python3; do
@@ -75,16 +85,50 @@ require_reason() {
   esac
 }
 
-MCP_FIXTURE_APPLIED=false
+MCP_FIXTURE=
+
+# Resolve the mcp tier's fixture before deploy: the OpenShift MCP server's
+# URL must be baked into the gateway config (MCP_SERVER_URL) at deploy time.
+# The everything fallback URL is deploy.sh's default.
+resolve_mcp_fixture() {
+  if [[ $MCP == everything ]]; then
+    MCP_FIXTURE=everything
+  elif url=$(NAMESPACE="$NAMESPACE" scripts/provision-mcp.sh); then
+    export MCP_SERVER_URL="$url"
+    export MCP_TEST=openshift
+    MCP_FIXTURE=openshift
+  elif [[ $MCP == openshift ]]; then
+    echo "MCP=openshift requested but OpenShift MCP provisioning failed" >&2
+    exit 1
+  else
+    echo "mcp: OpenShift MCP unavailable; falling back to the everything test server" >&2
+    MCP_FIXTURE=everything
+  fi
+
+  if [[ $MCP_FIXTURE == everything ]]; then
+    export MCP_TEST=everything
+    oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f - >&2
+    oc apply -f infra/mcp/everything/deployment.yaml -n "$NAMESPACE" >&2
+  fi
+  if [[ $DEPLOY != true ]]; then
+    echo "mcp: DEPLOY=false — the gateway must already be deployed with MCP_SERVER_URL=${MCP_SERVER_URL:-http://mcp-test:3001/mcp}" >&2
+  fi
+}
 
 cleanup() {
   local rc=$? c=0
   if [[ $SKIP_CLEANUP != true ]]; then
     scripts/cleanup.sh || c=$?
-    if [[ $MCP_FIXTURE_APPLIED == true ]]; then
-      oc delete -f infra/mcp/everything/deployment.yaml -n "$NAMESPACE" \
-        --ignore-not-found || c=$?
-    fi
+    case "$MCP_FIXTURE" in
+      everything)
+        oc delete -f infra/mcp/everything/deployment.yaml -n "$NAMESPACE" \
+          --ignore-not-found || c=$?
+        ;;
+      openshift)
+        oc delete -f infra/mcp/openshift/mcpserver.yaml -n "$NAMESPACE" \
+          --ignore-not-found || c=$?
+        ;;
+    esac
     oc delete namespace "$NAMESPACE" --ignore-not-found --timeout=120s || c=$?
     [[ $rc -eq 0 ]] && rc=$c
   fi
@@ -94,15 +138,12 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [[ $DEPLOY == true ]]; then
-  scripts/deploy.sh
+if [[ $LEVEL == mcp || $LEVEL == full ]]; then
+  resolve_mcp_fixture
 fi
 
-# The mcp tier needs the mcp-test fixture server; the harness owns it.
-if [[ $LEVEL == mcp || $LEVEL == full ]]; then
-  oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
-  oc apply -f infra/mcp/everything/deployment.yaml -n "$NAMESPACE"
-  MCP_FIXTURE_APPLIED=true
+if [[ $DEPLOY == true ]]; then
+  scripts/deploy.sh
 fi
 
 echo "=========================================="
