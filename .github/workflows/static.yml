@@ -7,7 +7,9 @@
 # Jobs:
 #   lint   — shellcheck, yamllint, actionlint (workflows), ruff
 #   render — chart render dry-run mirroring scripts/deploy.sh's render path
-#            (envsubst -> helm template), no cluster writes.
+#            (envsubst -> helm template), no cluster writes, plus the render
+#            contract test (deploy.sh DRY_RUN, web-search filter toggles with
+#            ENABLE_WEB_SEARCH).
 #
 # Both jobs call the Makefile targets (`make tools`, `make lint`, `make
 # render`) so developers can run the exact same commands locally.
@@ -63,3 +65,6 @@ jobs:
 
       - name: Render chart (no cluster writes)
         run: make render
+
+      - name: Render contract test (no cluster writes)
+        run: make render-check
