@@ -22,7 +22,7 @@ INFERENCE_HOST ?= litemaas.example.com
 INFERENCE_PORT ?= 443
 MCP_SERVER_URL ?= http://openshift-mcp:8080/mcp
 
-.PHONY: tools lint lint-shellcheck lint-yamllint lint-actionlint lint-ruff render
+.PHONY: tools lint lint-shellcheck lint-yamllint lint-actionlint lint-ruff render render-check
 
 ## tools: install the pinned lint tools (yamllint, ruff via pip; actionlint
 ## via GitHub release on linux/amd64 — install actionlint manually elsewhere,
@@ -52,7 +52,8 @@ lint-actionlint:
 	actionlint
 
 lint-ruff:
-	ruff check demos/shop-outage/sre-assistant demos/shop-outage/app/
+lint-ruff:
+	ruff check scripts/parse-manifest.py demos/shop-outage/sre-assistant demos/shop-outage/app/
 
 ## render: chart render dry-run mirroring scripts/deploy.sh's render path
 ## (envsubst -> helm template), no cluster writes. Helm 3 and Helm 4 render
@@ -69,3 +70,9 @@ render:
 		--set-string fullnameOverride=praxis-gateway \
 		--set-file "config.inline=$$work/config.yaml" > "$$work/rendered.yaml"; \
 	python3 -c 'import sys, yaml; docs = list(yaml.safe_load_all(open(sys.argv[1]))); assert docs, "rendered output is empty"; print(f"rendered.yaml: valid YAML, {len(docs)} resources")' "$$work/rendered.yaml"
+
+## render-check: contract test — scripts/deploy.sh in render-only (DRY_RUN)
+## mode for ENABLE_WEB_SEARCH=true|false; asserts the web-search filter
+## (openai_web_search_dispatch) and its WEB_SEARCH_API_KEY env toggle.
+render-check:
+	.github/scripts/render-check.sh
