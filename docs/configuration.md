@@ -98,6 +98,10 @@ support search.
 `openai_web_search_dispatch` filter, which reads `WEB_SEARCH_API_KEY`. When
 disabled, the filter is left out and the optional Brave Secret is not needed.
 
+When enabled, Helm installs and upgrades check that the configured Brave Secret
+has a nonempty `WEB_SEARCH_API_KEY`. Offline `helm template` renders do not check
+cluster Secrets.
+
 See the [setup instructions](../README.md#optional-web-search) for Secret creation.
 Requests use `tools: [{"type":"web_search"}]`; use
 `tool_choice: {"type":"web_search"}` to require an initial search, and

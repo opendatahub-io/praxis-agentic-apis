@@ -1,0 +1,10 @@
+{{- if .Values.global.webSearch.enabled }}
+{{- /* Offline renders cannot look up cluster Secrets. */}}
+{{- if lookup "v1" "Namespace" "" .Release.Namespace }}
+{{- $name := .Values.global.webSearch.secretName }}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- if not (get ($secret.data | default dict) "WEB_SEARCH_API_KEY") }}
+{{- fail (printf "Web search requires Secret %s with a nonempty WEB_SEARCH_API_KEY in namespace %s" $name .Release.Namespace) }}
+{{- end }}
+{{- end }}
+{{- end }}
