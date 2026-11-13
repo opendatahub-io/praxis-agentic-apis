@@ -165,14 +165,26 @@ jobs:
           if [[ -n "$PRAXIS_IMAGE" ]]; then
             if [[ $PRAXIS_IMAGE == *@sha256:* ]]; then
               repo="${PRAXIS_IMAGE%@*}" digest="${PRAXIS_IMAGE#*@}" tag=
+              [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+                echo "Invalid praxis image digest" >&2
+                exit 1
+              }
             else
               repo="${PRAXIS_IMAGE%:*}" tag="${PRAXIS_IMAGE##*:}" digest=
               if [[ "$tag" == "$PRAXIS_IMAGE" || "$repo" == "$PRAXIS_IMAGE" ]]; then
                 repo="$PRAXIS_IMAGE" tag=
-              elif command -v skopeo >/dev/null 2>&1; then
-                digest=$(skopeo inspect --format '{{.Digest}}' "docker://$PRAXIS_IMAGE") ||
-                  { echo "skopeo digest resolution failed; falling back to tag"; digest=; }
+              elif [[ ! "$tag" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]; then
+                echo "Invalid praxis image tag" >&2
+                exit 1
               fi
+            fi
+            [[ "$repo" =~ ^[a-zA-Z0-9._-]+(:[0-9]+)?(/[a-zA-Z0-9._-]+)*$ ]] || {
+              echo "Invalid praxis image repository" >&2
+              exit 1
+            }
+            if [[ -n "$tag" ]] && command -v skopeo >/dev/null 2>&1; then
+              digest=$(skopeo inspect --format '{{.Digest}}' "docker://$PRAXIS_IMAGE") ||
+                { echo "skopeo digest resolution failed; falling back to tag"; digest=; }
             fi
             args+=(--set-string "praxis-gateway.image.repository=$repo")
             if [[ -n "$digest" ]]; then
