@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       LITEMAAS_URL: ${{ vars.LITEMAAS_URL }}
+      LITEMAAS_INFERENCE_MODEL: ${{ vars.LITEMAAS_INFERENCE_MODEL }}
       LITEMAAS_API_KEY: ${{ secrets.LITEMAAS_API_KEY }}
       OC_SERVER: ${{ secrets.OC_SERVER }}
       OC_TOKEN: ${{ secrets.OC_TOKEN }}
@@ -77,6 +78,11 @@ jobs:
 
           set_or_skip LITEMAAS_API_KEY && models_check LITEMAAS_API_KEY "$LITEMAAS_API_KEY" "$LITEMAAS_URL"
           echo "LITEMAAS_API_KEY suffix: ...${LITEMAAS_API_KEY: -3}"
+          echo "Inference: POST ${LITEMAAS_URL%/}/chat/completions model=$LITEMAAS_INFERENCE_MODEL"
+          curl -s --max-time 60 -w '\nHTTP %{http_code}\n' "${LITEMAAS_URL%/}/chat/completions" \
+            -H "Authorization: Bearer $LITEMAAS_API_KEY" -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg m "$LITEMAAS_INFERENCE_MODEL" \
+              '{model: $m, max_tokens: 20, messages: [{role: "user", content: "Say hello world"}]}')"
 
           set_or_skip OC_TOKEN && http_check OC_TOKEN -k \
             -H "Authorization: Bearer $OC_TOKEN" "${OC_SERVER%/}/apis/user.openshift.io/v1/users/~"
