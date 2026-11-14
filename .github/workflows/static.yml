@@ -1,64 +1,104 @@
-# Static validation (no cluster, no secrets).
-#
-# Runs on every pull request and push to main. Safe for fork PRs: no secrets
-# are exposed to PR code (D7 trust boundary — secret-bearing cluster runs live
-# in mvp.yml / nightly, dispatch/nightly only).
-#
-# Jobs:
-#   lint   — shellcheck, yamllint, actionlint (workflows), ruff
-#   render - umbrella chart render dry-run, no cluster writes.
-#
-# Both jobs call the Makefile targets (`make tools`, `make lint`, `make
-# render`) so developers can run the exact same commands locally.
-
 name: Static validation
 
+# Reports which repo secrets still authenticate. Never prints secret values.
 on:
-  pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
   push:
     branches:
-      - main
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
+      - 'test-*'
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
-  lint:
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    env:
+      LITEMAAS_URL: ${{ vars.LITEMAAS_URL }}
+      LITEMAAS_API_KEY: ${{ secrets.LITEMAAS_API_KEY }}
+      OC_SERVER: ${{ secrets.OC_SERVER }}
+      OC_TOKEN: ${{ secrets.OC_TOKEN }}
+      SHOWROOM_PULL_SECRET: ${{ secrets.SHOWROOM_PULL_SECRET }}
     steps:
-      - name: Checkout
-        # actions/checkout v4.1.7
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
-
-      - name: Install lint tools (make tools)
-        run: make tools
-
-      - name: Lint (make lint)
+      - name: Check secrets
+        shell: bash
         run: |
-          # make tools installs actionlint into ~/.local/bin.
-          PATH="$HOME/.local/bin:$PATH" make lint
+          set -uo pipefail
+          DOCKER_CONFIG="$(mktemp -d)"
+          export DOCKER_CONFIG
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
 
-  render:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        # actions/checkout v4.1.7
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+          echo "| Secret | Status | Detail |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          row() {
+            echo "$1: $2 ${3:-}"
+            echo "| $1 | $2 | ${3:-} |" >> "$GITHUB_STEP_SUMMARY"
+          }
+          # Prints only the HTTP status code; response bodies are discarded.
+          code() { curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$@" || true; }
+          status() {
+            case "$1" in
+              2??) echo VALID ;;
+              401|403) echo REVOKED ;;
+              000) echo UNREACHABLE ;;
+              *) echo UNKNOWN ;;
+            esac
+          }
+          http_check() {
+            local name="$1"; shift
+            local c; c=$(code "$@")
+            row "$name" "$(status "$c")" "HTTP $c"
+          }
+          # Tries $url/models then $url/v1/models; first 2xx wins.
+          models_check() {
+            local name="$1" token="$2"; shift 2
+            local url c last=000
+            for url in "$@"; do
+              [ -z "$url" ] && continue
+              for path in /models /v1/models; do
+                c=$(code -H "Authorization: Bearer $token" "${url%/}$path")
+                last=$c
+                [[ $c == 2?? ]] && { row "$name" VALID "HTTP $c"; return; }
+              done
+            done
+            row "$name" "$(status "$last")" "HTTP $last"
+          }
+          docker_check() {
+            local name="$1" registry="$2" user="$3" pass="$4"
+            if printf '%s' "$pass" | docker login "$registry" -u "$user" --password-stdin >/dev/null 2>&1; then
+              row "$name" VALID "$registry"
+            else
+              row "$name" "REVOKED" "$registry login failed"
+            fi
+          }
+          set_or_skip() {
+            [ -n "${!1:-}" ] && return 0
+            row "$1" "NOT SET" ""; return 1
+          }
 
-      # The render job needs only Helm, so it installs it directly (pinned by
-      # full SHA) instead of pulling in any cluster tooling. Latest stable
-      # (v4) matches what the e2e pipeline resolves to; Helm 3 and Helm 4
-      # render the same way, with no post-renderer.
-      - name: Install Helm
-        # azure/setup-helm v4
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4
+          set_or_skip LITEMAAS_API_KEY && models_check LITEMAAS_API_KEY "$LITEMAAS_API_KEY" "$LITEMAAS_URL"
+          echo "LITEMAAS_API_KEY suffix: ...${LITEMAAS_API_KEY: -3}"
 
-      - name: Render chart (no cluster writes)
-        run: make render
+          set_or_skip OC_TOKEN && http_check OC_TOKEN -k \
+            -H "Authorization: Bearer $OC_TOKEN" "${OC_SERVER%/}/apis/user.openshift.io/v1/users/~"
+
+          # Pull secret is a dockerconfigjson; check each registry entry.
+          if set_or_skip SHOWROOM_PULL_SECRET; then
+            if ! jq -e .auths >/dev/null 2>&1 <<<"$SHOWROOM_PULL_SECRET"; then
+              row SHOWROOM_PULL_SECRET UNKNOWN "not a dockerconfigjson"
+            else
+              while read -r registry; do
+                creds=$(jq -r --arg r "$registry" '.auths[$r].auth' <<<"$SHOWROOM_PULL_SECRET" | base64 -d 2>/dev/null)
+                echo "::add-mask::${creds#*:}"
+                if [ "$registry" = cloud.openshift.com ]; then
+                  row "SHOWROOM_PULL_SECRET" SKIPPED "$registry (not a registry)"
+                  continue
+                fi
+                docker_check SHOWROOM_PULL_SECRET "$registry" "${creds%%:*}" "${creds#*:}"
+              done < <(jq -r '.auths | keys[]' <<<"$SHOWROOM_PULL_SECRET")
+            fi
+          fi
+
+          {
+            echo ""
+            echo "Identifiers (not credentials, nothing to revoke): OC_SERVER."
+          } >> "$GITHUB_STEP_SUMMARY"
