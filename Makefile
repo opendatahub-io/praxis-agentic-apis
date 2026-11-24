@@ -22,7 +22,7 @@ INFERENCE_HOST ?= litemaas.example.com
 INFERENCE_PORT ?= 443
 MCP_SERVER_URL ?= http://openshift-mcp:8080/mcp
 
-.PHONY: tools lint lint-shellcheck lint-yamllint lint-actionlint lint-ruff render
+.PHONY: tools lint lint-shellcheck lint-yamllint lint-actionlint lint-ruff render render-check
 
 ## tools: install the pinned lint tools (yamllint, ruff via pip; actionlint
 ## via GitHub release on linux/amd64 — install actionlint manually elsewhere,
@@ -65,3 +65,9 @@ render:
 		--set "global.inference.port=$(INFERENCE_PORT)" \
 		--set-string "global.mcp.serverUrl=$(MCP_SERVER_URL)" | \
 		python3 -c 'import sys, yaml; docs = list(yaml.safe_load_all(sys.stdin)); assert docs, "rendered output is empty"; print(f"rendered.yaml: valid YAML, {len(docs)} resources")'
+
+## render-check: contract test — helm template the umbrella chart for
+## global.webSearch.enabled=true|false; asserts the web-search filter
+## (openai_web_search_dispatch) and its WEB_SEARCH_API_KEY env toggle.
+render-check:
+	.github/scripts/render-check.sh

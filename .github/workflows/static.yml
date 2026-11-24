@@ -6,7 +6,9 @@
 #
 # Jobs:
 #   lint   — shellcheck, yamllint, actionlint (workflows), ruff
-#   render - umbrella chart render dry-run, no cluster writes.
+#   render — umbrella chart render dry-run, no cluster writes, plus the
+#            render contract test (web-search filter toggles with
+#            global.webSearch.enabled).
 #
 # Both jobs call the Makefile targets (`make tools`, `make lint`, `make
 # render`) so developers can run the exact same commands locally.
@@ -62,3 +64,6 @@ jobs:
 
       - name: Render chart (no cluster writes)
         run: make render
+
+      - name: Render contract test (no cluster writes)
+        run: make render-check
